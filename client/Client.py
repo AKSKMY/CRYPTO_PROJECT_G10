@@ -10,7 +10,7 @@ def send_request(request):
         client.send(json.dumps(request).encode())
 
         response_data = client.recv(1024)
-        print(f"Raw server response: {response_data}")  # Debugging output
+        # print(f"Raw server response: {response_data}")  # Debugging output
 
         if not response_data:
             raise ValueError("No response from server")

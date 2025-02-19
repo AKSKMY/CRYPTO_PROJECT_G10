@@ -84,7 +84,7 @@ def handle_client(client_socket):
             request = json.loads(data)
             print(f"Server received request: {request}")
             response = process_request(request)
-            print(f"SErver sending response: {response}")
+            print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
         except:
             break
