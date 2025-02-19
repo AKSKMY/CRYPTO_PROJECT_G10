@@ -10,7 +10,6 @@ def send_request(request):
         client.send(json.dumps(request).encode())
 
         response_data = client.recv(1024)
-        # print(f"Raw server response: {response_data}")  # Debugging output
 
         if not response_data:
             raise ValueError("No response from server")
@@ -24,7 +23,7 @@ def send_request(request):
         return {"status": "error", "message": f"Client error: {str(e)}"}
 
 def clear_screen():
-    os.system("cls")  # Clears the terminal on Windows
+    os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
 
 def main():
     logged_in = False
@@ -33,21 +32,30 @@ def main():
     while True:
         clear_screen()
         if not logged_in:
+            print("=== Welcome to Group 10 Crypto Project ===")
             print("1. Register")
             print("2. Login")
             print("3. Exit")
-            choice = input("Select an option: ")
+            choice = input("Select an option: ").strip()
             
             if choice == "1":
-                uname = input("Enter username: ")
-                pwd = getpass.getpass("Enter password: ")
+                uname = input("Enter username: ").strip()
+                pwd = getpass.getpass("Enter password: ").strip()
+                if not uname or not pwd:
+                    print("Error: Username and password cannot be empty.")
+                    input("Press Enter to continue...")
+                    continue
                 response = send_request({"command": "register", "username": uname, "password": pwd})
                 print(response["message"])
                 input("Press Enter to continue...")
             
             elif choice == "2":
-                uname = input("Enter username: ")
-                pwd = getpass.getpass("Enter password: ")
+                uname = input("Enter username: ").strip()
+                pwd = getpass.getpass("Enter password: ").strip()
+                if not uname or not pwd:
+                    print("Error: Username and password cannot be empty.")
+                    input("Press Enter to continue...")
+                    continue
                 response = send_request({"command": "login", "username": uname, "password": pwd})
                 print(response["message"])
                 if response["status"] == "success":
@@ -61,23 +69,37 @@ def main():
             else:
                 print("Invalid option. Try again.")
                 input("Press Enter to continue...")
-        
+
         else:
             clear_screen()
+            print(f"=== Logged in as: {username} ===")
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend (only if you've messaged them before)")
             print("4. Send Message")
             print("5. View Inbox")
-            print("6. Logout")
-            print("7. Remove friend")
-            choice = input("Select an option: ")
+            print("6. Remove Friend")
+            print("7. Logout")
+            choice = input("Select an option: ").strip()
 
             if choice == "1":  # Update Location
-                x = int(input("Enter X coordinate (0-99999): "))
-                y = int(input("Enter Y coordinate (0-99999): "))
-                response = send_request({"command": "update_location", "user": username, "x": x, "y": y})
-                print(response["message"])
+                while True:
+                    x = input("Enter X coordinate (0-99999): ").strip()
+                    y = input("Enter Y coordinate (0-99999): ").strip()
+
+                    if not x or not y:
+                        print("Error: Coordinates cannot be empty. Please enter valid numbers.")
+                    elif not x.isdigit() or not y.isdigit():
+                        print("Error: Please enter only numeric values for X and Y.")
+                    else:
+                        x, y = int(x), int(y)
+                        if 0 <= x <= 99999 and 0 <= y <= 99999:
+                            response = send_request({"command": "update_location", "user": username, "x": x, "y": y})
+                            print(response["message"])
+                            break  # Exit the loop once valid input is provided
+                        else:
+                            print("Error: Coordinates must be within the range 0-99999.")
+                
                 input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
@@ -93,19 +115,29 @@ def main():
                 input("Press Enter to continue...")
 
             elif choice == "3":  # Add Friend
-                friend = input("Enter friend's username: ")
-                response = send_request({"command": "add_friend", "user": username, "friend": friend})
-                print(response["message"])
+                friend = input("Enter friend's username: ").strip()
+                if not friend:
+                    print("Error: Friend's username cannot be empty.")
+                else:
+                    response = send_request({"command": "add_friend", "user": username, "friend": friend})
+                    print(response["message"])
                 input("Press Enter to continue...")
 
             elif choice == "4":  # Send Message
-                recipient = input("Enter recipient's username: ")
-                if recipient == username:
-                    print("You cannot message yourself.")
-                else:
-                    message = input("Enter your message: ")
-                    response = send_request({"command": "send_message", "sender": username, "recipient": recipient, "message": message})
-                    print(response["message"])
+                recipient = input("Enter recipient's username: ").strip()
+                if not recipient:
+                    print("Error: Recipient's username cannot be empty.")
+                    input("Press Enter to continue...")
+                    continue
+
+                message = input("Enter your message: ").strip()
+                if not message:
+                    print("Error: Message cannot be empty.")
+                    input("Press Enter to continue...")
+                    continue
+
+                response = send_request({"command": "send_message", "sender": username, "recipient": recipient, "message": message})
+                print(response["message"])
                 input("Press Enter to continue...")
 
             elif choice == "5":  # View Inbox
@@ -122,23 +154,24 @@ def main():
                     print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "6":  # Logout
+            elif choice == "6":  # Remove Friend
+                friend = input("Enter friend's username to remove: ").strip()
+                if not friend:
+                    print("Error: Friend's username cannot be empty.")
+                else:
+                    response = send_request({"command": "remove_friend", "user": username, "friend": friend})
+                    print(response["message"])
+                input("Press Enter to continue...")
+
+            elif choice == "7":  # Logout
                 logged_in = False
                 username = None
                 print("Logged out successfully.")
                 input("Press Enter to continue...")
 
-            elif choice == "7":  # Remove Friend
-                friend = input("Enter friend's username to remove: ")
-                response = send_request({"command": "remove_friend", "user": username, "friend": friend})
-                print(response["message"])
-                input("Press Enter to continue...")
-
             else:
                 print("Invalid option. Try again.")
                 input("Press Enter to continue...")
-
-            
 
 if __name__ == "__main__":
     main()
