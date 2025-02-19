@@ -4,15 +4,27 @@ import getpass
 import os
 
 def send_request(request):
-    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    client.connect(("127.0.0.1", 5555))
-    client.send(json.dumps(request).encode())
-    response = json.loads(client.recv(1024).decode())
-    client.close()
-    return response
+    try:
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.connect(("127.0.0.1", 5555))
+        client.send(json.dumps(request).encode())
+
+        response_data = client.recv(1024)
+        print(f"Raw server response: {response_data}")  # Debugging output
+
+        if not response_data:
+            raise ValueError("No response from server")
+
+        response = json.loads(response_data.decode())
+        client.close()
+        return response
+    except json.JSONDecodeError:
+        return {"status": "error", "message": "Invalid server response"}
+    except Exception as e:
+        return {"status": "error", "message": f"Client error: {str(e)}"}
 
 def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")  # Cross-platform clear screen
+    os.system("cls")  # Clears the terminal on Windows
 
 def main():
     logged_in = False
@@ -21,7 +33,6 @@ def main():
     while True:
         clear_screen()
         if not logged_in:
-            print("=== Welcome to the Secure Social Network ===")
             print("1. Register")
             print("2. Login")
             print("3. Exit")
@@ -53,13 +64,13 @@ def main():
         
         else:
             clear_screen()
-            print(f"=== Logged in as: {username} ===")  # Show the logged-in user
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend (only if you've messaged them before)")
             print("4. Send Message")
             print("5. View Inbox")
             print("6. Logout")
+            print("7. Remove friend")
             choice = input("Select an option: ")
 
             if choice == "1":  # Update Location
@@ -117,9 +128,17 @@ def main():
                 print("Logged out successfully.")
                 input("Press Enter to continue...")
 
+            elif choice == "7":  # Remove Friend
+                friend = input("Enter friend's username to remove: ")
+                response = send_request({"command": "remove_friend", "user": username, "friend": friend})
+                print(response["message"])
+                input("Press Enter to continue...")
+
             else:
                 print("Invalid option. Try again.")
                 input("Press Enter to continue...")
+
+            
 
 if __name__ == "__main__":
     main()
