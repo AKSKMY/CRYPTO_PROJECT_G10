@@ -3,6 +3,13 @@ import json
 import getpass
 import os
 
+import sys
+
+# Ensure the parent directory is in the Python path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
+
 def send_request(request):
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -28,6 +35,7 @@ def clear_screen():
 def main():
     logged_in = False
     username = None
+    private_key = None  # Store private key after login
     
     while True:
         clear_screen()
@@ -45,8 +53,23 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
-                response = send_request({"command": "register", "username": uname, "password": pwd})
+
+                 # Generate RSA keys
+                private_key_pem, public_key_pem = generate_rsa_keys()
+
+                # Register with the public key
+                response = send_request({
+                    "command": "register",
+                    "username": uname,
+                    "password": pwd,
+                    "public_key": public_key_pem
+                })
                 print(response["message"])
+
+                if response["status"] == "success":
+                    # Store private key locally
+                    private_key = private_key_pem
+                
                 input("Press Enter to continue...")
             
             elif choice == "2":
@@ -56,11 +79,14 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
+
                 response = send_request({"command": "login", "username": uname, "password": pwd})
                 print(response["message"])
+
                 if response["status"] == "success":
                     logged_in = True
                     username = uname
+                    private_key = None  # Placeholder for key storage
                 input("Press Enter to continue...")
             
             elif choice == "3":
@@ -76,8 +102,8 @@ def main():
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend (only if you've messaged them before)")
-            print("4. Send Message")
-            print("5. View Inbox")
+            print("4. Send Encrypted Message")
+            print("5. View Inbox (Decrypt Messages)")
             print("6. Remove Friend")
             print("7. Logout")
             choice = input("Select an option: ").strip()
@@ -123,7 +149,7 @@ def main():
                     print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "4":  # Send Message
+            elif choice == "4":  # Send Encrypted Message
                 recipient = input("Enter recipient's username: ").strip()
                 if not recipient:
                     print("Error: Recipient's username cannot be empty.")
@@ -136,18 +162,38 @@ def main():
                     input("Press Enter to continue...")
                     continue
 
-                response = send_request({"command": "send_message", "sender": username, "recipient": recipient, "message": message})
+                # Fetch recipient's public key
+                response = send_request({"command": "get_public_key", "user": recipient})
+                if response["status"] != "success":
+                    print("Error: Unable to fetch recipient's public key.")
+                    input("Press Enter to continue...")
+                    continue
+
+                recipient_public_key = response["public_key"]
+                encrypted_message = encrypt_message(recipient_public_key, message)
+
+                response = send_request({
+                    "command": "send_message",
+                    "sender": username,
+                    "recipient": recipient,
+                    "message": encrypted_message
+                })
                 print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "5":  # View Inbox
+            elif choice == "5":  # View Inbox (Decrypt Messages)
                 response = send_request({"command": "view_inbox", "user": username})
                 if response["status"] == "success":
                     inbox = response["inbox"]
                     if inbox:
                         print("\nInbox Messages:")
                         for msg in inbox:
-                            print(msg)
+                            sender, encrypted_message = msg.split(": ", 1)
+                            try:
+                                decrypted_message = decrypt_message(private_key, encrypted_message)
+                                print(f"From {sender}: {decrypted_message}")
+                            except:
+                                print(f"From {sender}: (Decryption failed)")
                     else:
                         print("Your inbox is empty.")
                 else:

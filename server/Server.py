@@ -21,7 +21,8 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL
+        password_hash TEXT NOT NULL,
+        public_key TEXT NOT NULL
     )
 ''')
 
@@ -94,20 +95,23 @@ def process_request(request):
     command = request.get("command")
 
     if command == "register":
-        #username, password = request["username"], request["password"]
-        username = request["username"]
-        password = request["password"]
-        if not username or not password:
-            return {"status": "error", "message": "Username and password cannot be empty"}
+        username, password, public_key = request["username"], request["password"], request["public_key"]
+        
+        if not username or not password or not public_key:
+            return {"status": "error", "message": "Username, password, and public key cannot be empty"}
+
         password_hash = hash_password(password)
+
         try:
-            cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, password_hash))
+            cursor.execute("INSERT INTO users (username, password_hash, public_key) VALUES (?, ?, ?)", 
+                           (username, password_hash, public_key))
             conn.commit()
-            return {"status": "error", "message": "Registration successful"}
+            return {"status": "success", "message": "Registration successful"}
         except sqlite3.IntegrityError:
-            return {"status": "success", "message": "User already exists"}
+            return {"status": "error", "message": "User already exists"}
         except Exception as e:
             return {"status": "error", "message": f"Database error: {str(e)}"}
+
     elif command == "login":
         username, password = request["username"], request["password"]
         cursor.execute("SELECT password_hash FROM users WHERE username=?", (username,))
@@ -115,6 +119,17 @@ def process_request(request):
         if user and verify_password(password, user[0]):
             return {"status": "success", "message": "Login successful"}
         return {"status": "error", "message": "Invalid credentials"}
+
+    elif command == "get_public_key":
+        username = request["user"]
+        
+        cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
+        user = cursor.fetchone()
+
+        if user and user[0]:
+            return {"status": "success", "public_key": user[0]}
+        
+        return {"status": "error", "message": "User not found or no public key stored"}
     
     elif command == "add_friend":
         friend = request["friend"]
