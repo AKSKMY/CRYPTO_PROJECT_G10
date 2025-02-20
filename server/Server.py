@@ -212,7 +212,7 @@ def process_request(request):
             return {"status": "success", "message": "Message sent"}
 
         else:
-            return {"status": "error", "message": "Cannot message this user"}
+            return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
     
     elif command == "view_inbox":
         user_id = get_user_id(request["user"])

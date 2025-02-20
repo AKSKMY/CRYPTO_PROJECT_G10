@@ -2,8 +2,9 @@ import socket
 import json
 import getpass
 import os
-
 import sys
+import tkinter as tk
+from tkinter import filedialog
 
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -16,7 +17,7 @@ def send_request(request):
         client.connect(("127.0.0.1", 5555))
         client.send(json.dumps(request).encode())
 
-        response_data = client.recv(1024)
+        response_data = client.recv(4096)
 
         if not response_data:
             raise ValueError("No response from server")
@@ -28,6 +29,16 @@ def send_request(request):
         return {"status": "error", "message": "Invalid server response"}
     except Exception as e:
         return {"status": "error", "message": f"Client error: {str(e)}"}
+
+def prompt_for_save_location(default_filename):
+    root = tk.Tk()
+    root.withdraw()  # Hide the root window
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".pem",
+        initialfile=default_filename,
+        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+    )
+    return file_path
 
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
@@ -46,7 +57,7 @@ def main():
             print("3. Exit")
             choice = input("Select an option: ").strip()
             
-            if choice == "1":
+            if choice == "1":  # Register
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
                 if not uname or not pwd:
@@ -54,10 +65,19 @@ def main():
                     input("Press Enter to continue...")
                     continue
 
-                 # Generate RSA keys
+                # Generate RSA keys
                 private_key_pem, public_key_pem = generate_rsa_keys()
 
-                # Register with the public key
+                # Ask user where to save private key
+                save_path = prompt_for_save_location(f"{uname}_private.pem")
+                if save_path:
+                    with open(save_path, "w") as key_file:
+                        key_file.write(private_key_pem)
+                    print(f"Private key saved to: {save_path}")
+                else:
+                    print("Warning: Private key not saved. Store it securely!")
+
+                # Register user with public key
                 response = send_request({
                     "command": "register",
                     "username": uname,
@@ -67,12 +87,11 @@ def main():
                 print(response["message"])
 
                 if response["status"] == "success":
-                    # Store private key locally
-                    private_key = private_key_pem
-                
+                    private_key = private_key_pem  # Store in memory for use
+
                 input("Press Enter to continue...")
             
-            elif choice == "2":
+            elif choice == "2":  # Login
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
                 if not uname or not pwd:
@@ -86,7 +105,22 @@ def main():
                 if response["status"] == "success":
                     logged_in = True
                     username = uname
-                    private_key = None  # Placeholder for key storage
+
+                    # Prompt user to locate their private key
+                    print("Please select your private key file for decryption.")
+                    private_key_path = filedialog.askopenfilename(
+                        title="Select Private Key File",
+                        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+                    )
+
+                    if private_key_path and os.path.exists(private_key_path):
+                        with open(private_key_path, "r") as key_file:
+                            private_key = key_file.read()
+                        print("Private key loaded successfully.")
+                    else:
+                        private_key = None
+                        print("Warning: No private key selected. Decryption may fail.")
+
                 input("Press Enter to continue...")
             
             elif choice == "3":
@@ -109,23 +143,21 @@ def main():
             choice = input("Select an option: ").strip()
 
             if choice == "1":  # Update Location
-                while True:
-                    x = input("Enter X coordinate (0-99999): ").strip()
-                    y = input("Enter Y coordinate (0-99999): ").strip()
+                x = input("Enter X coordinate (0-99999): ").strip()
+                y = input("Enter Y coordinate (0-99999): ").strip()
 
-                    if not x or not y:
-                        print("Error: Coordinates cannot be empty. Please enter valid numbers.")
-                    elif not x.isdigit() or not y.isdigit():
-                        print("Error: Please enter only numeric values for X and Y.")
+                if not x or not y:
+                    print("Error: Coordinates cannot be empty.")
+                elif not x.isdigit() or not y.isdigit():
+                    print("Error: Please enter only numeric values for X and Y.")
+                else:
+                    x, y = int(x), int(y)
+                    if 0 <= x <= 99999 and 0 <= y <= 99999:
+                        response = send_request({"command": "update_location", "user": username, "x": x, "y": y})
+                        print(response["message"])
                     else:
-                        x, y = int(x), int(y)
-                        if 0 <= x <= 99999 and 0 <= y <= 99999:
-                            response = send_request({"command": "update_location", "user": username, "x": x, "y": y})
-                            print(response["message"])
-                            break  # Exit the loop once valid input is provided
-                        else:
-                            print("Error: Coordinates must be within the range 0-99999.")
-                
+                        print("Error: Coordinates must be within the range 0-99999.")
+
                 input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
@@ -140,13 +172,21 @@ def main():
                     print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "3":  # Add Friend
+            elif choice == "3":  # Add Friend (Only if messaged before)
                 friend = input("Enter friend's username: ").strip()
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request({"command": "add_friend", "user": username, "friend": friend})
-                    print(response["message"])
+                    # Check if the user has messaged this friend before
+                    response = send_request({"command": "check_message_history", "user": username, "friend": friend})
+                    
+                    if response["status"] == "success" and response["has_messaged"]:
+                        # Proceed with adding friend
+                        add_response = send_request({"command": "add_friend", "user": username, "friend": friend})
+                        print(add_response["message"])
+                    else:
+                        print("Error: You can only add friends if you've messaged them before.")
+
                 input("Press Enter to continue...")
 
             elif choice == "4":  # Send Encrypted Message
@@ -183,21 +223,28 @@ def main():
 
             elif choice == "5":  # View Inbox (Decrypt Messages)
                 response = send_request({"command": "view_inbox", "user": username})
+
                 if response["status"] == "success":
                     inbox = response["inbox"]
                     if inbox:
                         print("\nInbox Messages:")
                         for msg in inbox:
-                            sender, encrypted_message = msg.split(": ", 1)
+                            sender = msg["from"]
+                            encrypted_message = msg["message"]
+                            timestamp = msg["timestamp"]
+
                             try:
                                 decrypted_message = decrypt_message(private_key, encrypted_message)
-                                print(f"From {sender}: {decrypted_message}")
-                            except:
-                                print(f"From {sender}: (Decryption failed)")
+                                print(f"From {sender} at {timestamp}: {decrypted_message}")
+
+                            except Exception as e:
+                                print(f"From {sender} at {timestamp}: (Decryption failed - {str(e)})")
                     else:
                         print("Your inbox is empty.")
+
                 else:
-                    print(response["message"])
+                    print(f"Error: {response['message']}")
+
                 input("Press Enter to continue...")
 
             elif choice == "6":  # Remove Friend
@@ -207,6 +254,7 @@ def main():
                 else:
                     response = send_request({"command": "remove_friend", "user": username, "friend": friend})
                     print(response["message"])
+
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
