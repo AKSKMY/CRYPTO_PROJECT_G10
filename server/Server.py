@@ -76,21 +76,9 @@ cursor.execute('''
     )
 ''')
 
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS messages (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        sender_id INTEGER,
-        recipient_id INTEGER,
-        message TEXT NOT NULL,
-        sender_grid_x INTEGER,
-        sender_grid_y INTEGER,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (sender_id) REFERENCES users(id),
-        FOREIGN KEY (recipient_id) REFERENCES users(id)
-    )
-''')
 
 conn.commit()
+active_clients = {}  # ✅ Dictionary to store online users and their sockets
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database
@@ -107,20 +95,33 @@ def get_user_id(username):
 #users = {}  # {username: {"password": "pass", "friends": set(), "location": (None, None), "inbox": [], "past_grids": set(), "messaged": set()}}
 
 def handle_client(client_socket):
-    while True:
-        try:
+    username = None
+    try:
+        while True:
             data = client_socket.recv(1024).decode()
-            if not data:
-                print("Received empty request.")
-                break
+            if not data.strip():
+                print("Received empty request")
+                break  # Ignore empty requests
+
             request = json.loads(data)
-            print(f"Server received request: {request}")
+            command = request.get("command")
+
+            if command == "login":
+                username = request["username"]
+                active_clients[username] = client_socket  # ✅ Store user in active_clients
+                print(f"[SERVER] {username} is now online.")
             response = process_request(request)
-            print(f"Server sending response: {response}")
+            print(f"[DEBUG] Sent response to {username}: {response}")
             client_socket.send(json.dumps(response).encode())
-        except:
-            break
-    client_socket.close()
+    except Exception as e:
+        print(f"[ERROR] Connection error: {str(e)}")
+
+    finally:
+        if username and username in active_clients:
+            print(f"[SERVER] {username} has disconnected.")
+            del active_clients[username]  # ✅ Remove user when they disconnect
+
+        client_socket.close()
 
 def process_request(request):
     command = request.get("command")
@@ -141,6 +142,7 @@ def process_request(request):
             return {"status": "success", "message": "User already exists"}
         except Exception as e:
             return {"status": "error", "message": f"Database error: {str(e)}"}
+    
     elif command == "login":
         username, password = request["username"], request["password"]
         cursor.execute("SELECT password_hash FROM users WHERE username=?", (username,))
@@ -184,7 +186,7 @@ def process_request(request):
                             (friend_public_key, user_public_key, friend_id, user_id))
 
                 conn.commit()
-                return {"status": "success", "message": "Friendship accepted! Public keys exchanged."}
+                return {"status": "success", "message": f"Friendship with {request['friend']} accepted! Public keys exchanged."}
             
         except sqlite3.IntegrityError:
             return {"status": "error", "message": "Friend request already sent or already friends"}
@@ -238,24 +240,26 @@ def process_request(request):
         sender_grid = (sender_location[0] // 1000, sender_location[1] // 1000)
         recipient_grid = (recipient_location[0] // 1000, recipient_location[1] // 1000)
         # Check if sender and recipient are friends
-        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                       (sender_id, recipient_id, recipient_id, sender_id))
+        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=? AND status='accepted') OR (user_id1=? AND user_id2=? AND status='accepted')",
+                   (sender_id, recipient_id, recipient_id, sender_id))
         are_friends = cursor.fetchone()
         # Check if sender's grid has been visited by recipient in the past
-        cursor.execute("SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND (sender_grid_x=? AND sender_grid_y=?)",
-                       (sender_id, recipient_id, sender_grid[0], sender_grid[1]))
-        
         # Condition checks
         if (sender_grid == recipient_grid) or are_friends:
             # Store message in the database
-            cursor.execute("INSERT INTO messages (sender_id, recipient_id, message) VALUES (?, ?, ?)", 
-                           (sender_id, recipient_id, message))
-            conn.commit()
+            if request["recipient"] in active_clients:
+                print(f"Recipient socket is {active_clients[request['recipient']]}")
+                print(f"Recipient of message is {request['recipient']}, message is {message}")
+                recipient_socket = active_clients[request["recipient"]]
+                try:
+                    recipient_socket.send(json.dumps({"from": request["sender"], "message": message}).encode())
+                    return {"status": "success", "message": "Message delivered"}
+                except:
+                    return {"status": "error", "message": "Failed to send message"}
 
-            return {"status": "success", "message": "Message sent"}
+            return {"status": "error", "message": "Recipient is offline"}
 
-        else:
-            return {"status": "error", "message": "Cannot message this user"}
+        return {"status": "error", "message": "Cannot message this user"}
     
     elif command == "view_inbox":
         user_id = get_user_id(request["user"])

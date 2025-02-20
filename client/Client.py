@@ -2,30 +2,62 @@ import socket
 import json
 import getpass
 import os
+import threading
+import time
+logged_in = False
+username = None
+client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+client.connect(("127.0.0.1", 5555))
+        
+def receive_messages():
+    """Continuously listens for incoming messages."""
+    client.setblocking(False)
+    while logged_in:
+        try:
+            data = client.recv(1024).decode()
+            if data:
+                
+                try:
+                    message = json.loads(data)
+                    if "from" in message and "message" in message:
+                        sender = message["from"]
+                        content = message["message"]
+                        print(f"\n🔹 New message from {sender}: {content}\nSelect an option: ", end="")
+                
+                except json.JSONDecodeError:
+                    print("[ERROR] Received invalid JSON format.")
+
+        except BlockingIOError:
+            time.sleep(0.1)  # ✅ Allow other operations to proceed without blocking
+            continue
+
+        
+        except (ConnectionResetError, OSError):
+            #print("[ERROR] Disconnected from server.")
+            continue
 
 def send_request(request):
     try:
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        client.connect(("127.0.0.1", 5555))
         client.send(json.dumps(request).encode())
-
+        client.settimeout(1)
         response_data = client.recv(1024)
-
         if not response_data:
             raise ValueError("No response from server")
-
         response = json.loads(response_data.decode())
-        client.close()
+        if "status" in response:
+            if "message" and "from" in response:
+                print(response['message'])  
         return response
     except json.JSONDecodeError:
         return {"status": "error", "message": "Invalid server response"}
     except Exception as e:
-        return {"status": "error", "message": f"Client error: {str(e)}"}
+        return {"status": "none", "message": ""}
 
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
 
 def main():
+    global logged_in  # Ensure this function accesses the global login status
     logged_in = False
     username = None
     
@@ -61,6 +93,7 @@ def main():
                 if response["status"] == "success":
                     logged_in = True
                     username = uname
+            
                 input("Press Enter to continue...")
             
             elif choice == "3":
@@ -72,6 +105,8 @@ def main():
 
         else:
             clear_screen()
+            threading.Thread(target=receive_messages, daemon=True).start()
+
             print(f"=== Logged in as: {username} ===")
             print("1. Update Location")
             print("2. Display Proximity")
@@ -99,7 +134,7 @@ def main():
                             break  # Exit the loop once valid input is provided
                         else:
                             print("Error: Coordinates must be within the range 0-99999.")
-                
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
@@ -112,6 +147,7 @@ def main():
                         print("No users nearby.")
                 else:
                     print(response["message"])
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
             elif choice == "3":  # Add Friend
@@ -121,6 +157,7 @@ def main():
                 else:
                     response = send_request({"command": "add_friend", "user": username, "friend": friend})
                     print(response["message"])
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
             elif choice == "4":  # Send Message
@@ -138,6 +175,7 @@ def main():
 
                 response = send_request({"command": "send_message", "sender": username, "recipient": recipient, "message": message})
                 print(response["message"])
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
             elif choice == "5":  # View Inbox
@@ -161,16 +199,14 @@ def main():
                 else:
                     response = send_request({"command": "remove_friend", "user": username, "friend": friend})
                     print(response["message"])
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
                 logged_in = False
                 username = None
                 print("Logged out successfully.")
-                input("Press Enter to continue...")
-
-            else:
-                print("Invalid option. Try again.")
+                time.sleep(0.1)
                 input("Press Enter to continue...")
 
 if __name__ == "__main__":
