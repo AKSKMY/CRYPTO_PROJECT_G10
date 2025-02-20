@@ -5,6 +5,34 @@ import sqlite3
 import bcrypt
 import sys
 import signal
+from cryptography.hazmat.primitives.asymmetric import rsa
+from cryptography.hazmat.primitives import serialization
+
+def generate_key_pair():
+    """Generate an RSA private/public key pair."""
+    private_key = rsa.generate_private_key(
+        public_exponent=65537,
+        key_size=2048
+    )
+    
+    # Serialize private key
+    private_key_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.TraditionalOpenSSL,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode()
+
+    return private_key_pem
+
+def get_public_key(private_key_pem):
+    # Extract public key
+    private_key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    public_key = private_key.public_key()
+    
+    return public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode()
 
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(("127.0.0.1", 5555))
@@ -21,7 +49,8 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS users (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
-        password_hash TEXT NOT NULL
+        password_hash TEXT NOT NULL,
+        private_key TEXT NOT NULL
     )
 ''')
 
@@ -38,6 +67,9 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS friendships (
         user_id1 INTEGER,
         user_id2 INTEGER,
+        status TEXT NOT NULL CHECK(status IN ('pending', 'accepted')),
+        public_key1 TEXT NOT NULL,  -- ✅ Store user_id1's public key
+        public_key2 TEXT NOT NULL,  -- ✅ Store user_id2's public key
         PRIMARY KEY (user_id1, user_id2),
         FOREIGN KEY (user_id1) REFERENCES users(id),
         FOREIGN KEY (user_id2) REFERENCES users(id)
@@ -100,8 +132,9 @@ def process_request(request):
         if not username or not password:
             return {"status": "error", "message": "Username and password cannot be empty"}
         password_hash = hash_password(password)
+        private_key = generate_key_pair()
         try:
-            cursor.execute("INSERT INTO users (username, password_hash) VALUES (?, ?)", (username, password_hash))
+            cursor.execute("INSERT INTO users (username, password_hash, private_key) VALUES (?, ?, ?)", (username, password_hash, private_key))
             conn.commit()
             return {"status": "error", "message": "Registration successful"}
         except sqlite3.IntegrityError:
@@ -117,23 +150,48 @@ def process_request(request):
         return {"status": "error", "message": "Invalid credentials"}
     
     elif command == "add_friend":
-        friend = request["friend"]
         user_id = get_user_id(request["user"])
-        friend_id = get_user_id(friend)
+        friend_id = get_user_id(request["friend"])
+
+        if not user_id or not friend_id:
+            return {"status": "error", "message": "User not found"}
+
+        # ✅ If no existing request, send a new friend request
+        try:
+            cursor.execute("INSERT INTO friendships (user_id1, user_id2, status, public_key1, public_key2) VALUES (?, ?, 'pending', '', '')",
+                        (user_id, friend_id))
+            conn.commit()
+            # Check if a pending request already exists from the other user
+            cursor.execute("SELECT status FROM friendships WHERE user_id1=? AND user_id2=?", (user_id, friend_id))
+            existing_request_1 = cursor.fetchone()
+            cursor.execute("SELECT status FROM friendships WHERE user_id1=? AND user_id2=?", (friend_id, user_id))
+            existing_request_2 = cursor.fetchone()
+            if existing_request_2 == None:
+                return {"status": "success", "message": f"Friend request sent to {request['friend']}"}
+            if existing_request_1[0] and existing_request_2[0] == "pending":
+                # ✅ Fetch both users' public keys
+                cursor.execute("SELECT private_key FROM users WHERE id=?", (user_id,))
+                user_public_key = get_public_key(cursor.fetchone()[0])
+
+                cursor.execute("SELECT private_key FROM users WHERE id=?", (friend_id,))
+                friend_public_key = get_public_key(cursor.fetchone()[0])
+
+                # ✅ Update friendship to accepted and store public keys
+                cursor.execute("UPDATE friendships SET status='accepted', public_key1=?, public_key2=? WHERE user_id1=? AND user_id2=?", 
+                            (user_public_key, friend_public_key, user_id, friend_id))
+
+                cursor.execute("UPDATE friendships SET status='accepted', public_key1=?, public_key2=? WHERE user_id1=? AND user_id2=?", 
+                            (friend_public_key, user_public_key, friend_id, user_id))
+
+                conn.commit()
+                return {"status": "success", "message": "Friendship accepted! Public keys exchanged."}
+            
+        except sqlite3.IntegrityError:
+            return {"status": "error", "message": "Friend request already sent or already friends"}
+
         
 
-        if user_id and friend_id:
-            try:
-                cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (user_id, friend_id))
-                
-                cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (friend_id, user_id))
-                
-                conn.commit()
-                return {"status": "success", "message": f"Added {friend} as a friend"}
-            except sqlite3.IntegrityError:
-                return {"status": "error", "message": "Already friends"}
-        return {"status": "error", "message": "Friend not found"}
-
+        
     elif command == "update_location":
         user_id = get_user_id(request["user"])
         if user_id:
