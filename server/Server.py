@@ -244,6 +244,21 @@ def process_request(request):
 
         return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
 
+        # In process_request function on the server
+    elif command == "clear_messages":
+        username = request["username"]
+        user_id = get_user_id(username)
+
+        if user_id:
+            try:
+                cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
+                conn.commit()
+                return {"status": "success", "message": "All messages deleted"}
+            except Exception as e:
+                return {"status": "error", "message": f"Error deleting messages: {str(e)}"}
+        return {"status": "error", "message": "No messages for User defined found!"}
+
+
     return {"status": "error", "message": "Unknown command"}
     
 def signal_handler(sig, frame):

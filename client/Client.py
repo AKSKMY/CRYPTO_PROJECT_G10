@@ -9,6 +9,8 @@ from tkinter import filedialog
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
+from algorithms.rsa_private_auth import is_private_key_correct
+
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
 
 def send_request(request):
@@ -65,15 +67,21 @@ def main():
                     input("Press Enter to continue...")
                     continue
 
-                # Generate RSA keys
+                # In main() method, inside the registration section
                 private_key_pem, public_key_pem = generate_rsa_keys()
 
-                # Ask user where to save private key
-                save_path = prompt_for_save_location(f"{uname}_private.pem")
-                if save_path:
-                    with open(save_path, "w") as key_file:
+                # Prompt user with a print statement about saving the private key
+                print(f"\nPlease save your private key securely. This key is unique to your account.")
+                print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
+
+                # Save private key to a file specific to the user
+                private_key_filename = f"{uname}_private.pem"
+                private_key_path = prompt_for_save_location(private_key_filename)
+
+                if private_key_path:
+                    with open(private_key_path, "w") as key_file:
                         key_file.write(private_key_pem)
-                    print(f"Private key saved to: {save_path}")
+                    print(f"Private key saved to: {private_key_path}")
                 else:
                     print("Warning: Private key not saved. Store it securely!")
 
@@ -99,14 +107,22 @@ def main():
                     input("Press Enter to continue...")
                     continue
 
-                response = send_request({"command": "login", "username": uname, "password": pwd})
-                print(response["message"])
+            # Login Process - Prompt to locate the private key
+            # Assuming you are checking the response after login
+            response = send_request({"command": "login", "username": uname, "password": pwd})
 
-                if response["status"] == "success":
-                    logged_in = True
-                    username = uname
+            # Debug: Print the full response from the server
+            print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
 
-                    # Prompt user to locate their private key
+            if response["status"] == "success":
+                logged_in = True
+                username = uname
+
+                # Ensure that the response contains "public_key"
+                if "public_key" in response:
+                    public_key_pem = response["public_key"]
+
+                    # Proceed with private key selection and verification
                     print("Please select your private key file for decryption.")
                     private_key_path = filedialog.askopenfilename(
                         title="Select Private Key File",
@@ -117,11 +133,20 @@ def main():
                         with open(private_key_path, "r") as key_file:
                             private_key = key_file.read()
                         print("Private key loaded successfully.")
+
+                        # Verify the loaded private key
+                        challenge = "some_random_challenge"  # Replace with actual challenge from server
+                        if is_private_key_correct(private_key, public_key_pem, challenge):
+                            print("Private key is correct!")
+                        else:
+                            print("Private key is incorrect!")
+                            logged_in = False
                     else:
                         private_key = None
                         print("Warning: No private key selected. Decryption may fail.")
+                else:
+                    print("Error: Public key not found in server response.")
 
-                input("Press Enter to continue...")
             
             elif choice == "3":
                 break
@@ -260,9 +285,13 @@ def main():
             elif choice == "7":  # Logout
                 logged_in = False
                 username = None
+
+                # Delete all messages associated with the user
+                response = send_request({"command": "clear_messages", "username": username})
+                print(response["message"])
+
                 print("Logged out successfully.")
                 input("Press Enter to continue...")
-
             else:
                 print("Invalid option. Try again.")
                 input("Press Enter to continue...")
