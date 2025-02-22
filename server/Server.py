@@ -114,11 +114,20 @@ def process_request(request):
 
     elif command == "login":
         username, password = request["username"], request["password"]
-        cursor.execute("SELECT password_hash FROM users WHERE username=?", (username,))
+        
+        # Retrieve user credentials from database
+        cursor.execute("SELECT password_hash, public_key FROM users WHERE username=?", (username,))
         user = cursor.fetchone()
+
         if user and verify_password(password, user[0]):
-            return {"status": "success", "message": "Login successful"}
+            return {
+                "status": "success",
+                "message": "Login successful",
+                "public_key": user[1]  # Include the public key in the response
+            }
+        
         return {"status": "error", "message": "Invalid credentials"}
+
 
     elif command == "get_public_key":
         username = request["user"]
@@ -131,23 +140,52 @@ def process_request(request):
         
         return {"status": "error", "message": "User not found or no public key stored"}
     
+    elif command == "check_message_history":
+        user_id = get_user_id(request["user"])
+        friend_id = get_user_id(request["friend"])
+
+        if not user_id or not friend_id:
+            return {"status": "error", "message": "User or friend not found"}
+
+        # Check if the user has sent a message to the friend
+        cursor.execute(
+            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
+            (user_id, friend_id)
+        )
+        message_sent = cursor.fetchone()
+
+        if message_sent:
+            return {"status": "success", "message": "Message history found"}
+        else:
+            return {"status": "error", "message": "No message history found"}
+
+    
     elif command == "add_friend":
         friend = request["friend"]
         user_id = get_user_id(request["user"])
         friend_id = get_user_id(friend)
-        
 
-        if user_id and friend_id:
-            try:
-                cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (user_id, friend_id))
-                
-                cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (friend_id, user_id))
-                
-                conn.commit()
-                return {"status": "success", "message": f"Added {friend} as a friend"}
-            except sqlite3.IntegrityError:
-                return {"status": "error", "message": "Already friends"}
-        return {"status": "error", "message": "Friend not found"}
+        if not user_id or not friend_id:
+            return {"status": "error", "message": "Friend not found"}
+
+        # Check if user has sent a message before adding as a friend
+        cursor.execute(
+            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
+            (user_id, friend_id)
+        )
+        message_sent = cursor.fetchone()
+
+        if not message_sent:
+            return {"status": "error", "message": "You must send a message before adding this friend"}
+
+        try:
+            cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (user_id, friend_id))
+            cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (friend_id, user_id))
+            conn.commit()
+            return {"status": "success", "message": f"Added {friend} as a friend"}
+        except sqlite3.IntegrityError:
+            return {"status": "error", "message": "Already friends"}
+
 
     elif command == "update_location":
         user_id = get_user_id(request["user"])
@@ -243,6 +281,22 @@ def process_request(request):
         conn.commit()
 
         return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
+
+        # In process_request function on the server
+    elif command == "clear_messages":
+        username = request["username"]
+        user_id = get_user_id(username)
+
+        if user_id:
+            try:
+                cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
+                conn.commit()
+                return {"status": "success", "message": "All messages deleted"}
+            except Exception as e:
+                return {"status": "error", "message": f"Error deleting messages: {str(e)}"}
+        return {"status": "error", "message": "No messages to delete for the current user!"}
+
+
 
     return {"status": "error", "message": "Unknown command"}
     
