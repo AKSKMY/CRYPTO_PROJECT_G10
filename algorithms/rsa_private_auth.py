@@ -1,24 +1,30 @@
-# /algorithms/rsa_private_auth.py
+0# /algorithms/rsa_private_auth.py
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
 
-def is_private_key_correct(private_key, public_key_pem, challenge):
+def is_private_key_correct(private_key_pem, public_key_pem, challenge):
     """
     Verifies if the loaded private key is correct by signing a challenge
     and verifying the signature with the corresponding public key.
 
     Parameters:
-    - private_key: Loaded private key to be checked
-    - public_key_pem: Public key associated with the user (PEM format)
+    - private_key_pem: Private key in PEM format (string)
+    - public_key_pem: Public key in PEM format (string)
     - challenge: Challenge string to be signed and verified
 
     Returns:
     - True if the private key is correct, False otherwise
     """
     try:
-        # Convert the public key PEM to a public key object
+        # Convert the private key PEM string to an RSA key object
+        private_key = serialization.load_pem_private_key(
+            private_key_pem.encode(),  # Ensure it's in bytes
+            password=None  # Assuming no password protection
+        )
+
+        # Convert the public key PEM to an RSA key object
         public_key = serialization.load_pem_public_key(public_key_pem.encode())
 
         # Sign the challenge with the loaded private key

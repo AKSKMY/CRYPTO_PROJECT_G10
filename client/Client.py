@@ -96,56 +96,67 @@ def main():
 
                 if response["status"] == "success":
                     private_key = private_key_pem  # Store in memory for use
+                    print("Registration successful. Please log in now.")
+                    input("Press Enter to continue...")  # Wait for user input
+                    continue  # Return to the main menu after registration
 
-                input("Press Enter to continue...")
             
             elif choice == "2":  # Login
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
+                
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
-                    continue
+                    continue  # Return to the Welcome page
 
-            # Login Process - Prompt to locate the private key
-            # Assuming you are checking the response after login
-            response = send_request({"command": "login", "username": uname, "password": pwd})
+                # Send login request to server
+                response = send_request({"command": "login", "username": uname, "password": pwd})
 
-            # Debug: Print the full response from the server
-            print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
+                # Debug: Print the full response from the server
+                print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
 
-            if response["status"] == "success":
-                logged_in = True
-                username = uname
+                if response["status"] == "success":
+                    logged_in = True
+                    username = uname
 
-                # Ensure that the response contains "public_key"
-                if "public_key" in response:
-                    public_key_pem = response["public_key"]
+                    # Ensure that the response contains "public_key"
+                    if "public_key" in response:
+                        public_key_pem = response["public_key"]
 
-                    # Proceed with private key selection and verification
-                    print("Please select your private key file for decryption.")
-                    private_key_path = filedialog.askopenfilename(
-                        title="Select Private Key File",
-                        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
-                    )
+                        # Proceed with private key selection and verification
+                        print("Please select your private key file for decryption.")
+                        private_key_path = filedialog.askopenfilename(
+                            title="Select Private Key File",
+                            filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+                        )
 
-                    if private_key_path and os.path.exists(private_key_path):
-                        with open(private_key_path, "r") as key_file:
-                            private_key = key_file.read()
-                        print("Private key loaded successfully.")
+                        if private_key_path and os.path.exists(private_key_path):
+                            with open(private_key_path, "r") as key_file:
+                                private_key_pem = key_file.read()
+                            print("Private key loaded successfully.")
 
-                        # Verify the loaded private key
-                        challenge = "some_random_challenge"  # Replace with actual challenge from server
-                        if is_private_key_correct(private_key, public_key_pem, challenge):
-                            print("Private key is correct!")
+                            # Verify the loaded private key
+                            challenge = "some_random_challenge"  # Replace with actual challenge from server
+                            if is_private_key_correct(private_key_pem, public_key_pem, challenge):
+                                print("Private key is correct!")
+                                input("Press Enter to continue...")
+                            else:
+                                print("Private key is incorrect!")
+                                input("Press Enter to return to the Welcome page...")
+                                logged_in = False
                         else:
-                            print("Private key is incorrect!")
-                            logged_in = False
+                            private_key_pem = None
+                            print("Warning: No private key selected. Decryption may fail.")
                     else:
-                        private_key = None
-                        print("Warning: No private key selected. Decryption may fail.")
+                        print("Error: Public key not found in server response.")
+                
                 else:
-                    print("Error: Public key not found in server response.")
+                    print("Error: Login failed -", response["message"])  # Show proper error message
+                    input("Press Enter to return to the Welcome page...")
+                    continue  # Return to Welcome page
+
+
 
             
             elif choice == "3":
@@ -197,20 +208,25 @@ def main():
                     print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "3":  # Add Friend (Only if messaged before)
-                friend = input("Enter friend's username: ").strip()
-                if not friend:
-                    print("Error: Friend's username cannot be empty.")
+            elif choice == "3":  # Add Friend
+                friend_name = input("Enter the username of the friend you want to add: ").strip()
+
+                if not friend_name:
+                    print("Error: Friend username cannot be empty.")
+                    input("Press Enter to continue...")
+                    continue
+
+                # Check if a message history exists before adding the friend
+                response = send_request({"command": "check_message_history", "user": username, "friend": friend_name})
+
+                print("DEBUG: Server response:", response)  # Debugging
+
+                if response["status"] == "success":
+                    # If a message history exists, proceed with adding the friend
+                    response = send_request({"command": "add_friend", "user": username, "friend": friend_name})
+                    print(response["message"])
                 else:
-                    # Check if the user has messaged this friend before
-                    response = send_request({"command": "check_message_history", "user": username, "friend": friend})
-                    
-                    if response["status"] == "success" and response["has_messaged"]:
-                        # Proceed with adding friend
-                        add_response = send_request({"command": "add_friend", "user": username, "friend": friend})
-                        print(add_response["message"])
-                    else:
-                        print("Error: You can only add friends if you've messaged them before.")
+                    print("Error:", response["message"])
 
                 input("Press Enter to continue...")
 
@@ -247,30 +263,51 @@ def main():
                 input("Press Enter to continue...")
 
             elif choice == "5":  # View Inbox (Decrypt Messages)
+                if private_key_pem is None:
+                    print("Error: No private key loaded. Please select your private key.")
+                    
+                    # Prompt user to select private key
+                    private_key_path = filedialog.askopenfilename(
+                        title="Select Private Key File",
+                        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+                    )
+
+                    if private_key_path and os.path.exists(private_key_path):
+                        with open(private_key_path, "r") as key_file:
+                            private_key_pem = key_file.read()
+                        print("Private key loaded successfully.")
+                    else:
+                        print("Error: No private key selected. Cannot decrypt messages.")
+                        input("Press Enter to continue...")
+                        continue  # Return to menu
+
+                # Now proceed to decrypt messages
                 response = send_request({"command": "view_inbox", "user": username})
 
                 if response["status"] == "success":
-                    inbox = response["inbox"]
-                    if inbox:
+                    inbox_messages = response.get("inbox", [])
+
+                    if not inbox_messages:
+                        print("\nInbox is empty. No messages to display.")
+                    else:
                         print("\nInbox Messages:")
-                        for msg in inbox:
-                            sender = msg["from"]
-                            encrypted_message = msg["message"]
-                            timestamp = msg["timestamp"]
+                        for message in inbox_messages:
+                            sender = message["from"]
+                            timestamp = message["timestamp"]
+                            encrypted_message = message["message"]
 
                             try:
-                                decrypted_message = decrypt_message(private_key, encrypted_message)
+                                decrypted_message = decrypt_message(private_key_pem, encrypted_message)
                                 print(f"From {sender} at {timestamp}: {decrypted_message}")
-
                             except Exception as e:
                                 print(f"From {sender} at {timestamp}: (Decryption failed - {str(e)})")
-                    else:
-                        print("Your inbox is empty.")
 
                 else:
-                    print(f"Error: {response['message']}")
+                    print("Error:", response["message"])
 
                 input("Press Enter to continue...")
+
+
 
             elif choice == "6":  # Remove Friend
                 friend = input("Enter friend's username to remove: ").strip()
@@ -283,18 +320,16 @@ def main():
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
-                logged_in = False
-                username = None
-
-                # Delete all messages associated with the user
-                response = send_request({"command": "clear_messages", "username": username})
-                print(response["message"])
-
+                if logged_in:  # Ensure user is logged in before logging out
+                    response = send_request({"command": "clear_messages", "username": username})
+                    print(response["message"])
+                    logged_in = False
+                    username = None
+                else:
+                    print("Error: No user logged in.")
                 print("Logged out successfully.")
                 input("Press Enter to continue...")
-            else:
-                print("Invalid option. Try again.")
-                input("Press Enter to continue...")
+
 
 if __name__ == "__main__":
     main()
