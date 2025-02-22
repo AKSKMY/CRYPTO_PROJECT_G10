@@ -172,7 +172,7 @@ def main():
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend (only if you've messaged them before)")
-            print("4. Send Encrypted Message")
+            print("4. Send Encrypted Message (Only if you are in close proximity or friend)")
             print("5. View Inbox (Decrypt Messages)")
             print("6. Remove Friend")
             print("7. Logout")
