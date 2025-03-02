@@ -164,7 +164,6 @@ def process_request(request):
 
     
     elif command == "add_friend":
-        print("I")
         user_id = get_user_id(request["user"])
         friend_id = get_user_id(request["friend"])
 
@@ -177,7 +176,6 @@ def process_request(request):
             (user_id, friend_id, friend_id, user_id)
         )
         existing_friendship = cursor.fetchone()
-        print("reached")
         if existing_friendship:
             friendship_status = existing_friendship[0]
 
