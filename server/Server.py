@@ -218,64 +218,7 @@ def process_request(request):
         "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
         (user_id, friend_id, friend_id, user_id)
     )
-        existing_friendship = cursor.fetchone()
-
-        if existing_friendship:
-            friendship_status = existing_friendship[0]
-
-            # ✅ If both users already sent a request, change status to "accepted"
-            if friendship_status == "pending":
-                cursor.execute(
-                    "UPDATE friendships SET status='accepted' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_id, friend_id, friend_id, user_id)
-                )
-                conn.commit()
-
-                # ✅ Fetch and exchange public keys
-                cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
-                user_public_key = cursor.fetchone()[0]
-                cursor.execute("SELECT public_key FROM users WHERE id=?", (friend_id,))
-                friend_public_key = cursor.fetchone()[0]
-
-                cursor.execute(
-                    "UPDATE friendships SET public_key1=?, public_key2=? WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_public_key, friend_public_key, user_id, friend_id, friend_id, user_id)
-                )
-                conn.commit()
-
-                return {"status": "success", "message": f"Friendship accepted! Public keys exchanged."}
-
-            # ✅ If the existing status is "acquaintance", upgrade it to "pending"
-            elif friendship_status == "acquaintance":
-                cursor.execute(
-                    "UPDATE friendships SET status='pending' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_id, friend_id, friend_id, user_id)
-                )
-                conn.commit()
-                return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-
-            return {"status": "error", "message": "Friend request already sent."}
-
-        # ✅ If no prior friendship exists, insert a new pending request
-        cursor.execute(
-            "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
-            (user_id, friend_id)
-        )
-        message_sent = cursor.fetchone()
-
-        if not message_sent:
-            return {"status": "error", "message": "You must send a message before adding this friend"}
-
-        try:
-            cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (user_id, friend_id))
-            cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (friend_id, user_id))
-            conn.commit()
-            return {"status": "success", "message": f"Added {friend} as a friend"}
-        except sqlite3.IntegrityError:
-            return {"status": "error", "message": "Already friends"}
-
-        return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-
+        
     elif command == "update_location":
         user_id = get_user_id(request["user"])
         if user_id:

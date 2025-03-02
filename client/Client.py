@@ -223,9 +223,6 @@ def main():
 
                 if response["status"] == "success":
                     # If a message history exists, proceed with adding the friend
-                    response = send_request({"command": "add_friend", "user": username, "friend": friend_name})
-
-                if response and "message" in response:
                     print(response["message"])
                 else:
                     print("[ERROR] Failed to send a friend request.")
