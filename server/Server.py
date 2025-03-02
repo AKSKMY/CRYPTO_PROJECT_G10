@@ -39,6 +39,9 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS friendships (
         user_id1 INTEGER,
         user_id2 INTEGER,
+        status TEXT,  -- Can be 'pending', 'acquaintance', or 'accepted'
+        public_key1 TEXT,  -- Stores user1's public key
+        public_key2 TEXT,  -- Stores user2's public key
         PRIMARY KEY (user_id1, user_id2),
         FOREIGN KEY (user_id1) REFERENCES users(id),
         FOREIGN KEY (user_id2) REFERENCES users(id)
@@ -168,16 +171,12 @@ def process_request(request):
         if not user_id or not friend_id:
             return {"status": "error", "message": "Friend not found"}
 
-        # Check if user has sent a message before adding as a friend
+        # ✅ Check if a friendship record already exists
         cursor.execute(
-            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
-            (user_id, friend_id)
+            "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+            (user_id, friend_id, friend_id, user_id)
         )
-        message_sent = cursor.fetchone()
-
-        if not message_sent:
-            return {"status": "error", "message": "You must send a message before adding this friend"}
-
+        existing_friendship = cursor.fetchone()
         try:
             cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (user_id, friend_id))
             cursor.execute("INSERT INTO friendships (user_id1, user_id2) VALUES (?, ?)", (friend_id, user_id))
