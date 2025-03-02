@@ -171,7 +171,7 @@ def main():
             print(f"=== Logged in as: {username} ===")
             print("1. Update Location")
             print("2. Display Proximity")
-            print("3. Add Friend (only if you've messaged them before)")
+            print("3. Add Friend")
             print("4. Send Encrypted Message (Only if you are in close proximity or friend)")
             print("5. View Inbox (Decrypt Messages)")
             print("6. Remove Friend")
@@ -216,7 +216,14 @@ def main():
                     input("Press Enter to continue...")
                     continue
 
+                # Check if a message history exists before adding the friend
                 response = send_request({"command": "add_friend", "user": username, "friend": friend_name})
+
+                print("DEBUG: Server response:", response)  # Debugging
+
+                if response["status"] == "success":
+                    # If a message history exists, proceed with adding the friend
+                    response = send_request({"command": "add_friend", "user": username, "friend": friend_name})
 
                 if response and "message" in response:
                     print(response["message"])
