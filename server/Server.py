@@ -164,6 +164,7 @@ def process_request(request):
 
     
     elif command == "add_friend":
+        print("I")
         user_id = get_user_id(request["user"])
         friend_id = get_user_id(request["friend"])
 
@@ -176,7 +177,7 @@ def process_request(request):
             (user_id, friend_id, friend_id, user_id)
         )
         existing_friendship = cursor.fetchone()
-
+        print("reached")
         if existing_friendship:
             friendship_status = existing_friendship[0]
 
@@ -214,10 +215,14 @@ def process_request(request):
             return {"status": "error", "message": "Friend request already sent or already friends."}
 
         # ✅ If no prior friendship exists, insert a new pending request
+        print("here")
         cursor.execute(
-        "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-        (user_id, friend_id, friend_id, user_id)
-    )
+        "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
+        (user_id, friend_id)
+        )
+        conn.commit()
+
+        return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
         
     elif command == "update_location":
         user_id = get_user_id(request["user"])
