@@ -22,6 +22,7 @@ cursor.execute('''
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
         public_key TEXT NOT NULL
     )
 ''')
@@ -64,12 +65,6 @@ cursor.execute('''
 
 conn.commit()
 
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database
-
-def verify_password(password, password_hash):
-    return bcrypt.checkpw(password.encode(), password_hash.encode()) # encode() to convert to bytes for comparison
-
 # Function to fetch user ID by username
 def get_user_id(username):
     cursor.execute("SELECT id FROM users WHERE username=?", (username,))
@@ -98,16 +93,14 @@ def process_request(request):
     command = request.get("command")
 
     if command == "register":
-        username, password, public_key = request["username"], request["password"], request["public_key"]
+        username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
         
-        if not username or not password or not public_key:
+        if not username or not password_hash or not salt or not public_key:
             return {"status": "error", "message": "Username, password, and public key cannot be empty"}
 
-        password_hash = hash_password(password)
-
         try:
-            cursor.execute("INSERT INTO users (username, password_hash, public_key) VALUES (?, ?, ?)", 
-                           (username, password_hash, public_key))
+            cursor.execute("INSERT INTO users (username, password_hash, salt, public_key) VALUES (?, ?, ?, ?)", 
+                           (username, password_hash, salt, public_key))
             conn.commit()
             return {"status": "success", "message": "Registration successful"}
         except sqlite3.IntegrityError:
@@ -115,14 +108,25 @@ def process_request(request):
         except Exception as e:
             return {"status": "error", "message": f"Database error: {str(e)}"}
 
+    elif command == "get_salt":
+        username = request["username"]
+        
+        cursor.execute("SELECT salt FROM users WHERE username=?", (username,))
+        result = cursor.fetchone()
+
+        if result:
+            return {"status": "success", "salt": result[0]}  # ✅ Send the stored salt
+
+        return {"status": "error", "message": "User not found"}
+
     elif command == "login":
-        username, password = request["username"], request["password"]
+        username, password_hash = request["username"], request["password_hash"]
         
         # Retrieve user credentials from database
         cursor.execute("SELECT password_hash, public_key FROM users WHERE username=?", (username,))
         user = cursor.fetchone()
 
-        if user and verify_password(password, user[0]):
+        if user and user[0]==password_hash:
             return {
                 "status": "success",
                 "message": "Login successful",
@@ -213,7 +217,6 @@ def process_request(request):
             return {"status": "error", "message": "Friend request already sent or already friends."}
 
         # ✅ If no prior friendship exists, insert a new pending request
-        print("here")
         cursor.execute(
         "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
         (user_id, friend_id)

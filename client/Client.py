@@ -5,13 +5,22 @@ import os
 import sys
 import tkinter as tk
 from tkinter import filedialog
-
+import bcrypt
+import base64
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from algorithms.rsa_private_auth import is_private_key_correct
 
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
+
+def generate_salt():
+    """Generate a random 16-byte salt and return it as a base64 string."""
+    return bcrypt.gensalt().decode()  # ✅ Generate a unique salt
+
+def hash_password(password, salt):
+    """Hash the password using the provided salt."""
+    return bcrypt.hashpw(password.encode(), salt.encode()).decode()
 
 def send_request(request):
     try:
@@ -66,7 +75,8 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
-
+                salt = generate_salt()
+                hashed_pwd = hash_password(pwd, salt)
                 # In main() method, inside the registration section
                 private_key_pem, public_key_pem = generate_rsa_keys()
 
@@ -89,7 +99,8 @@ def main():
                 response = send_request({
                     "command": "register",
                     "username": uname,
-                    "password": pwd,
+                    "password_hash": hashed_pwd,
+                    "salt": salt,
                     "public_key": public_key_pem
                 })
                 print(response["message"])
@@ -109,9 +120,16 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue  # Return to the Welcome page
+                salt_response = send_request({"command": "get_salt", "username": uname})
 
+                if salt_response["status"] != "success":
+                    print("[ERROR] Could not retrieve salt. Login failed.")
+                    input("Press Enter to continue...")
+                    continue
+                salt = salt_response["salt"]
+                hashed_pwd = hash_password(pwd, salt)
                 # Send login request to server
-                response = send_request({"command": "login", "username": uname, "password": pwd})
+                response = send_request({"command": "login", "username": uname, "password_hash": hashed_pwd})
 
                 # Debug: Print the full response from the server
                 print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
