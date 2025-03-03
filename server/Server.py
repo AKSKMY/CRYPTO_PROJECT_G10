@@ -22,6 +22,7 @@ cursor.execute('''
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
         public_key TEXT NOT NULL
     )
 ''')
@@ -98,16 +99,14 @@ def process_request(request):
     command = request.get("command")
 
     if command == "register":
-        username, password, public_key = request["username"], request["password"], request["public_key"]
+        username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
         
-        if not username or not password or not public_key:
+        if not username or not password_hash or not salt or not public_key:
             return {"status": "error", "message": "Username, password, and public key cannot be empty"}
 
-        password_hash = hash_password(password)
-
         try:
-            cursor.execute("INSERT INTO users (username, password_hash, public_key) VALUES (?, ?, ?)", 
-                           (username, password_hash, public_key))
+            cursor.execute("INSERT INTO users (username, password_hash, salt, public_key) VALUES (?, ?, ?, ?)", 
+                           (username, password_hash, salt, public_key))
             conn.commit()
             return {"status": "success", "message": "Registration successful"}
         except sqlite3.IntegrityError:
@@ -115,14 +114,25 @@ def process_request(request):
         except Exception as e:
             return {"status": "error", "message": f"Database error: {str(e)}"}
 
+    elif command == "get_salt":
+        username = request["username"]
+        
+        cursor.execute("SELECT salt FROM users WHERE username=?", (username,))
+        result = cursor.fetchone()
+
+        if result:
+            return {"status": "success", "salt": result[0]}  # ✅ Send the stored salt
+
+        return {"status": "error", "message": "User not found"}
+
     elif command == "login":
-        username, password = request["username"], request["password"]
+        username, password_hash = request["username"], request["password_hash"]
         
         # Retrieve user credentials from database
         cursor.execute("SELECT password_hash, public_key FROM users WHERE username=?", (username,))
         user = cursor.fetchone()
 
-        if user and verify_password(password, user[0]):
+        if user and user[0]==password_hash:
             return {
                 "status": "success",
                 "message": "Login successful",
