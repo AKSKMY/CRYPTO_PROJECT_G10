@@ -65,12 +65,6 @@ cursor.execute('''
 
 conn.commit()
 
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database
-
-def verify_password(password, password_hash):
-    return bcrypt.checkpw(password.encode(), password_hash.encode()) # encode() to convert to bytes for comparison
-
 # Function to fetch user ID by username
 def get_user_id(username):
     cursor.execute("SELECT id FROM users WHERE username=?", (username,))
@@ -223,7 +217,6 @@ def process_request(request):
             return {"status": "error", "message": "Friend request already sent or already friends."}
 
         # ✅ If no prior friendship exists, insert a new pending request
-        print("here")
         cursor.execute(
         "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
         (user_id, friend_id)
