@@ -1,2 +1,3 @@
-SELECT * FROM users;
-DELETE FROM users;
+ENTER DATABASE>> sqlite3 proximity.db
+VIEW CURRENT USERS>> SELECT * FROM users;
+DELETE ALL USERS>> DELETE FROM users;

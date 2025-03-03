@@ -39,6 +39,9 @@ cursor.execute('''
     CREATE TABLE IF NOT EXISTS friendships (
         user_id1 INTEGER,
         user_id2 INTEGER,
+        status TEXT,  -- Can be 'pending', 'acquaintance', or 'accepted'
+        public_key1 TEXT,  -- Stores user1's public key
+        public_key2 TEXT,  -- Stores user2's public key
         PRIMARY KEY (user_id1, user_id2),
         FOREIGN KEY (user_id1) REFERENCES users(id),
         FOREIGN KEY (user_id2) REFERENCES users(id)
@@ -173,7 +176,6 @@ def process_request(request):
             (user_id, friend_id, friend_id, user_id)
         )
         existing_friendship = cursor.fetchone()
-
         if existing_friendship:
             friendship_status = existing_friendship[0]
 
@@ -208,17 +210,18 @@ def process_request(request):
                 conn.commit()
                 return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
 
-            return {"status": "error", "message": "Friend request already sent."}
+            return {"status": "error", "message": "Friend request already sent or already friends."}
 
         # ✅ If no prior friendship exists, insert a new pending request
+        print("here")
         cursor.execute(
-            "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
-            (user_id, friend_id)
+        "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
+        (user_id, friend_id)
         )
         conn.commit()
 
         return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-    
+        
     elif command == "update_location":
         user_id = get_user_id(request["user"])
         if user_id:
@@ -233,7 +236,6 @@ def process_request(request):
         user_id = get_user_id(request["user"])
         if not user_id:
             return {"status": "error", "message": "User not found"}
-
         cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (user_id,))
         user_location = cursor.fetchone()
         if not user_location:
