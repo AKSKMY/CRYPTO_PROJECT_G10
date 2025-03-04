@@ -5,6 +5,11 @@ import os
 import sys
 import tkinter as tk
 from tkinter import filedialog
+import ssl
+
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives import serialization
 
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -13,24 +18,80 @@ from algorithms.rsa_private_auth import is_private_key_correct
 
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
 
-def send_request(request):
+def sign_message(private_key_pem, message):
+    """Sign a message with the client's private key."""
+    private_key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+    signature = private_key.sign(
+        message.encode(),
+        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
+        hashes.SHA256()
+    )
+    return signature.hex()
+
+def send_request(request, private_key_pem=None):
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE  # Disable certificate verification for testing
+
+        client = context.wrap_socket(client)
         client.connect(("127.0.0.1", 5555))
+
+        request_json = json.dumps(request)
+
+        # Only sign the message if a private key is available AND it's not a registration request
+        if private_key_pem and request["command"] not in ["register"]:
+            try:
+                signature = sign_message(private_key_pem, request_json)
+                request["signature"] = signature  # Attach signature to request
+            except Exception as e:
+                print(f"Error signing message: {e}")
+                return {"status": "error", "message": "Signing error"}
+
+        else:
+            request["signature"] = None  # Explicitly indicate no signature
+
+        print(f"Sending request: {request}")  # Debugging output
+
         client.send(json.dumps(request).encode())
 
         response_data = client.recv(4096)
-
         if not response_data:
-            raise ValueError("No response from server")
+            print("Error: No response from server.")
+            return {"status": "error", "message": "No response from server"}
 
         response = json.loads(response_data.decode())
+
+        print(f"Received response: {response}")  # Debugging output
         client.close()
         return response
+
     except json.JSONDecodeError:
         return {"status": "error", "message": "Invalid server response"}
     except Exception as e:
         return {"status": "error", "message": f"Client error: {str(e)}"}
+
+# def send_request(request):
+#     try:
+#         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+#         client.connect(("127.0.0.1", 5555))
+#         client.send(json.dumps(request).encode())
+
+#         response_data = client.recv(4096)
+
+#         if not response_data:
+#             raise ValueError("No response from server")
+
+#         response = json.loads(response_data.decode())
+#         client.close()
+#         return response
+#     except json.JSONDecodeError:
+#         return {"status": "error", "message": "Invalid server response"}
+#     except Exception as e:
+#         return {"status": "error", "message": f"Client error: {str(e)}"}
+
 
 def prompt_for_save_location(default_filename):
     root = tk.Tk()
@@ -47,8 +108,6 @@ def clear_screen():
 
 def main():
     logged_in = False
-    username = None
-    private_key = None  # Store private key after login
     
     while True:
         clear_screen()
@@ -62,19 +121,26 @@ def main():
             if choice == "1":  # Register
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
+
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
 
-                # In main() method, inside the registration section
+                # ✅ Step 1: Check if the username already exists
+                check_response = send_request({"command": "check_username", "username": uname}, None)
+
+                if check_response["status"] == "error" and check_response["message"] == "User already exists":
+                    print(f"Error: Username '{uname}' is already taken. Please try a different one.")
+                    input("Press Enter to continue...")
+                    continue
+
+                # ✅ Step 2: Generate and save keys ONLY if the username is available
                 private_key_pem, public_key_pem = generate_rsa_keys()
 
-                # Prompt user with a print statement about saving the private key
                 print(f"\nPlease save your private key securely. This key is unique to your account.")
                 print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
 
-                # Save private key to a file specific to the user
                 private_key_filename = f"{uname}_private.pem"
                 private_key_path = prompt_for_save_location(private_key_filename)
 
@@ -85,47 +151,46 @@ def main():
                 else:
                     print("Warning: Private key not saved. Store it securely!")
 
-                # Register user with public key
-                response = send_request({
+                # ✅ Step 3: Register user with public key
+                request_data = {
                     "command": "register",
                     "username": uname,
                     "password": pwd,
                     "public_key": public_key_pem
-                })
-                print(response["message"])
+                }
 
-                if response["status"] == "success":
-                    private_key = private_key_pem  # Store in memory for use
+                response = send_request(request_data, None)  # No private key needed for registration
+
+                if "status" in response and response["status"] == "success":
                     print("Registration successful. Please log in now.")
-                    input("Press Enter to continue...")  # Wait for user input
-                    continue  # Return to the main menu after registration
+                else:
+                    print(f"Error: Registration failed - {response.get('message', 'Unknown error')}")
 
-            
+                input("Press Enter to continue...")
+
             elif choice == "2":  # Login
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
-                
+
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue  # Return to the Welcome page
 
-                # Send login request to server
+                # Send login request to server (without signing it)
                 response = send_request({"command": "login", "username": uname, "password": pwd})
 
-                # Debug: Print the full response from the server
-                print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
+                print("DEBUG: Server response:", response)
 
                 if response["status"] == "success":
                     logged_in = True
                     username = uname
 
-                    # Ensure that the response contains "public_key"
                     if "public_key" in response:
                         public_key_pem = response["public_key"]
 
-                        # Proceed with private key selection and verification
-                        print("Please select your private key file for decryption.")
+                        # Prompt user to select their private key
+                        print("Please select your private key file.")
                         private_key_path = filedialog.askopenfilename(
                             title="Select Private Key File",
                             filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
@@ -139,25 +204,20 @@ def main():
                             # Verify the loaded private key
                             challenge = "some_random_challenge"  # Replace with actual challenge from server
                             if is_private_key_correct(private_key_pem, public_key_pem, challenge):
-                                print("Private key is correct!")
-                                input("Press Enter to continue...")
+                                print("Private key is correct! Secure transactions enabled.")
                             else:
                                 print("Private key is incorrect!")
                                 input("Press Enter to return to the Welcome page...")
                                 logged_in = False
+                                private_key_pem = None  # Ensure private key is cleared
                         else:
-                            private_key_pem = None
-                            print("Warning: No private key selected. Decryption may fail.")
-                    else:
-                        print("Error: Public key not found in server response.")
-                
+                            print("Warning: No private key selected. Some actions may not work.")
+                            private_key_pem = None  # Ensure private key is set to None
+
                 else:
-                    print("Error: Login failed -", response["message"])  # Show proper error message
+                    print("Error: Login failed -", response["message"])
                     input("Press Enter to return to the Welcome page...")
-                    continue  # Return to Welcome page
-
-
-
+                    continue
             
             elif choice == "3":
                 break
@@ -168,7 +228,7 @@ def main():
 
         else:
             clear_screen()
-            print(f"=== Logged in as: {username} ===")
+            print(f"=== Logged in as: {uname} ===")
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend")
@@ -189,7 +249,7 @@ def main():
                 else:
                     x, y = int(x), int(y)
                     if 0 <= x <= 99999 and 0 <= y <= 99999:
-                        response = send_request({"command": "update_location", "user": username, "x": x, "y": y})
+                        response = send_request({"command": "update_location", "user": uname, "x": x, "y": y}, private_key_pem)
                         print(response["message"])
                     else:
                         print("Error: Coordinates must be within the range 0-99999.")
@@ -197,9 +257,9 @@ def main():
                 input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
-                response = send_request({"command": "check_proximity", "user": username})
+                response = send_request({"command": "check_proximity", "user": uname}, private_key_pem)
                 if response["status"] == "success":
-                    nearby_users = [user for user in response["nearby_users"] if user != username]
+                    nearby_users = [user for user in response["nearby_users"] if user != uname]
                     if nearby_users:
                         print("Nearby users:", ", ".join(nearby_users))
                     else:
@@ -217,7 +277,7 @@ def main():
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request({"command": "add_friend", "user": username, "friend": friend_name})
+                response = send_request({"command": "add_friend", "user": uname, "friend": friend_name}, private_key_pem)
 
                 print("DEBUG: Server response:", response)  # Debugging
 
@@ -242,7 +302,7 @@ def main():
                     continue
 
                 # Fetch recipient's public key
-                response = send_request({"command": "get_public_key", "user": recipient})
+                response = send_request({"command": "get_public_key", "user": recipient}, private_key_pem)
                 if response["status"] != "success":
                     print("Error: Unable to fetch recipient's public key.")
                     input("Press Enter to continue...")
@@ -253,10 +313,10 @@ def main():
 
                 response = send_request({
                     "command": "send_message",
-                    "sender": username,
+                    "sender": uname,
                     "recipient": recipient,
                     "message": encrypted_message
-                })
+                }, private_key_pem)
                 print(response["message"])
                 input("Press Enter to continue...")
 
@@ -280,7 +340,7 @@ def main():
                         continue  # Return to menu
 
                 # Now proceed to decrypt messages
-                response = send_request({"command": "view_inbox", "user": username})
+                response = send_request({"command": "view_inbox", "user": uname}, private_key_pem)
 
                 if response["status"] == "success":
                     inbox_messages = response.get("inbox", [])
@@ -306,23 +366,22 @@ def main():
                 input("Press Enter to continue...")
 
 
-
             elif choice == "6":  # Remove Friend
                 friend = input("Enter friend's username to remove: ").strip()
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request({"command": "remove_friend", "user": username, "friend": friend})
+                    response = send_request({"command": "remove_friend", "user": uname, "friend": friend}, private_key_pem)
                     print(response["message"])
 
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
-                    response = send_request({"command": "clear_messages", "username": username})
+                    response = send_request({"command": "clear_messages", "username": uname}, private_key_pem)
                     print(response["message"])
                     logged_in = False
-                    username = None
+                    uname = None
                 else:
                     print("Error: No user logged in.")
                 print("Logged out successfully.")
