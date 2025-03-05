@@ -48,7 +48,7 @@ def send_request(request, private_key_pem=None):
             try:
                 signature = sign_message(private_key_pem, request_string)
                 request["signature"] = signature  # Attach signature to request
-                print("Request signed successfully")
+                # print("Request signed successfully")
             except Exception as e:
                 print(f"Error signing message: {e}")
                 return {"status": "error", "message": "Signing error"}
@@ -64,8 +64,8 @@ def send_request(request, private_key_pem=None):
         # client.send(json.dumps(request).encode())
 
         response_data = client.recv(4096)
-        if not response_data:
-            return {"status": "error", "message": "No response from server"}
+        # if not response_data:
+        #     return {"status": "error", "message": "No response from server"}
 
         # response = json.loads(response_data.decode())
 
@@ -146,43 +146,44 @@ def main():
                 # ✅ Step 1: Check if the username already exists
                 check_response = send_request({"command": "check_username", "username": uname}, None)
 
-                if check_response["status"] == "error" and check_response["message"] == "User already exists":
+                if check_response["status"] == "error" or check_response["message"] == "User already exists":
+                    
                     print(f"Error: Username '{uname}' is already taken. Please try a different one.")
                     input("Press Enter to continue...")
-                    continue
 
-                # ✅ Step 2: Generate and save keys ONLY if the username is available
-                private_key_pem, public_key_pem = generate_rsa_keys()
-
-                print(f"\nPlease save your private key securely. This key is unique to your account.")
-                print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
-
-                private_key_filename = f"{uname}_private.pem"
-                private_key_path = prompt_for_save_location(private_key_filename)
-
-                if private_key_path:
-                    with open(private_key_path, "w") as key_file:
-                        key_file.write(private_key_pem)
-                    print(f"Private key saved to: {private_key_path}")
                 else:
-                    print("Warning: Private key not saved. Store it securely!")
+                    # ✅ Step 2: Generate and save keys ONLY if the username is available
+                    private_key_pem, public_key_pem = generate_rsa_keys()
 
-                # ✅ Step 3: Register user with public key
-                request_data = {
-                    "command": "register",
-                    "username": uname,
-                    "password": pwd,
-                    "public_key": public_key_pem
-                }
+                    print(f"\nPlease save your private key securely. This key is unique to your account.")
+                    print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
 
-                response = send_request(request_data, None)  # No private key needed for registration
+                    private_key_filename = f"{uname}_private.pem"
+                    private_key_path = prompt_for_save_location(private_key_filename)
 
-                if "status" in response and response["status"] == "success":
-                    print("Registration successful. Please log in now.")
-                else:
-                    print(f"Error: Registration failed - {response.get('message', 'Unknown error')}")
+                    if private_key_path:
+                        with open(private_key_path, "w") as key_file:
+                            key_file.write(private_key_pem)
+                        print(f"Private key saved to: {private_key_path}")
+                    else:
+                        print("Warning: Private key not saved. Store it securely!")
 
-                input("Press Enter to continue...")
+                    # ✅ Step 3: Register user with public key
+                    request_data = {
+                        "command": "register",
+                        "username": uname,
+                        "password": pwd,
+                        "public_key": public_key_pem
+                    }
+
+                    response = send_request(request_data, None)  # No private key needed for registration
+
+                    if "status" in response and response["status"] == "success":
+                        print("Registration successful. Please log in now.")
+                    else:
+                        print(f"Error: Registration failed - {response.get('message', 'Unknown error')}")
+
+                    input("Press Enter to continue...")
 
             elif choice == "2":  # Login
                 uname = input("Enter username: ").strip()
@@ -205,12 +206,20 @@ def main():
                     if "public_key" in response:
                         public_key_pem = response["public_key"]
 
+                        # Create a hidden root window and bring it to the front
+                        root = tk.Tk()
+                        root.withdraw()  # Hide the root window
+                        root.attributes('-topmost', True)  # Bring file dialog to the front
+                        root.update()
+
                         # Prompt user to select their private key
                         print("Please select your private key file.")
                         private_key_path = filedialog.askopenfilename(
                             title="Select Private Key File",
                             filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
                         )
+
+                        root.destroy() 
 
                         if private_key_path and os.path.exists(private_key_path):
                             with open(private_key_path, "r") as key_file:
