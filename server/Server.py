@@ -406,9 +406,7 @@ def process_request(request):
 
             # In process_request function on the server
         elif command == "clear_messages":
-            username = request["username"]
-            user_id = get_user_id(username)
-
+            user_id = get_user_id(request["user"]) 
             if user_id:
                 try:
                     cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))

@@ -401,7 +401,7 @@ def main():
 
             elif choice == "7":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
-                    response = send_request({"command": "clear_messages", "username": uname}, private_key_pem)
+                    response = send_request({"command": "clear_messages", "user": uname}, private_key_pem)
                     print(response["message"])
                     logged_in = False
                     uname = None
