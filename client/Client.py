@@ -15,8 +15,10 @@ from cryptography.hazmat.primitives import serialization
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from algorithms.rsa_private_auth import is_private_key_correct
-
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
+
+from algorithms.encryption_utils import encrypt_message as encrypt_aes, decrypt_message as decrypt_aes
+
 
 def sign_message(private_key_pem, message):
     """Sign a message with the client's private key."""
@@ -39,32 +41,39 @@ def send_request(request, private_key_pem=None):
         client = context.wrap_socket(client)
         client.connect(("127.0.0.1", 5555))
 
-        request_json = json.dumps(request)
+        request_string = json.dumps(request)
 
         # Only sign the message if a private key is available AND it's not a registration request
-        if private_key_pem and request["command"] not in ["register"]:
+        if private_key_pem and request["command"] not in ["register", "login"]:
             try:
-                signature = sign_message(private_key_pem, request_json)
+                signature = sign_message(private_key_pem, request_string)
                 request["signature"] = signature  # Attach signature to request
+                print("Request signed successfully")
             except Exception as e:
                 print(f"Error signing message: {e}")
                 return {"status": "error", "message": "Signing error"}
-
         else:
             request["signature"] = None  # Explicitly indicate no signature
 
-        print(f"Sending request: {request}")  # Debugging output
+        request_json = json.dumps(request)
+        # print(f"Sending request: {request}")  # Debugging output
 
-        client.send(json.dumps(request).encode())
+        # 🔒 Encrypt the request before sending
+        encrypted_request = encrypt_aes(request_json)
+        client.sendall(encrypted_request.encode())
+        # client.send(json.dumps(request).encode())
 
         response_data = client.recv(4096)
         if not response_data:
-            print("Error: No response from server.")
             return {"status": "error", "message": "No response from server"}
 
-        response = json.loads(response_data.decode())
+        # response = json.loads(response_data.decode())
 
-        print(f"Received response: {response}")  # Debugging output
+        # print(f"Received response: {response}")  # Debugging output
+        
+        # 🔓 Decrypt the response
+        decrypted_response = decrypt_aes(response_data.decode())
+        response = json.loads(decrypted_response)
         client.close()
         return response
 
@@ -96,11 +105,18 @@ def send_request(request, private_key_pem=None):
 def prompt_for_save_location(default_filename):
     root = tk.Tk()
     root.withdraw()  # Hide the root window
+
+    # ✅ Force window to the front
+    root.attributes("-topmost", True)
+    root.update()
+
     file_path = filedialog.asksaveasfilename(
         defaultextension=".pem",
         initialfile=default_filename,
         filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
     )
+
+    root.destroy() 
     return file_path
 
 def clear_screen():
@@ -180,7 +196,7 @@ def main():
                 # Send login request to server (without signing it)
                 response = send_request({"command": "login", "username": uname, "password": pwd})
 
-                print("DEBUG: Server response:", response)
+                # print("DEBUG: Server response:", response)
 
                 if response["status"] == "success":
                     logged_in = True
@@ -279,7 +295,7 @@ def main():
                 # Check if a message history exists before adding the friend
                 response = send_request({"command": "add_friend", "user": uname, "friend": friend_name}, private_key_pem)
 
-                print("DEBUG: Server response:", response)  # Debugging
+                # print("DEBUG: Server response:", response)  # Debugging
 
                 if response["status"] == "success":
                     # If a message history exists, proceed with adding the friend

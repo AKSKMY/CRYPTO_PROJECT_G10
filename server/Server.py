@@ -6,11 +6,15 @@ import bcrypt
 import sys
 import signal
 import ssl
+import os
 
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography.exceptions import InvalidSignature
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+from algorithms.encryption_utils import encrypt_message, decrypt_message
 
 # server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 # server.bind(("127.0.0.1", 5555))
@@ -123,25 +127,31 @@ def get_user_id(username):
 def handle_client(client_socket):
     while True:
         try:
-            data = client_socket.recv(4096).decode()  # Increase buffer size for full data reception
-            if not data:
+            encrypted_data = client_socket.recv(4096).decode()
+            if not encrypted_data:
                 print("Received empty request. Closing connection.")
                 break
             
-            print(f"Raw request received: {data}")  # Debugging log
+            # print(f"Raw request received: {data}")  # Debugging log
+
+            # 🔓 Decrypt the request
+            decrypted_data = decrypt_message(encrypted_data)
+            # print(f"Decrypted request received: {decrypted_data}")
             
             try:
-                request = json.loads(data)
+                request = json.loads(decrypted_data)
             except json.JSONDecodeError:
                 print("Error: Received invalid JSON format.")
                 client_socket.close()
                 return
             
-            print(f"Server received request: {request}")
+            # print(f"Server received request: {request}")
             
             response = process_request(request)
-            print(f"Server sending response: {response}")
-            client_socket.send(json.dumps(response).encode())
+
+            # 🔒 Encrypt the response before sending
+            encrypted_response = encrypt_message(json.dumps(response))
+            client_socket.send(encrypted_response.encode())
 
         except Exception as e:
             print(f"Error handling client request: {e}")
@@ -151,8 +161,10 @@ def handle_client(client_socket):
 
 def process_request(request):
     command = request.get("command")
-    username = request.get("username")
+    username = request.get("user")
     signature = request.get("signature")
+
+    print(f"Command received: {command} by user {username}.\n")
 
     # ✅ Handle registration requests first (NO signature needed)
     if command == "register":
@@ -192,6 +204,7 @@ def process_request(request):
 
     # ✅ Ensure non-login requests have a valid signature
     if command not in ["login", "register"]:
+        # print(f"signature: {signature}")
         if not signature:
             return {"status": "error", "message": "Missing authentication signature"}
         
