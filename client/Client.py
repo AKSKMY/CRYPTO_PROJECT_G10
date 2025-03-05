@@ -146,11 +146,9 @@ def main():
                 # ✅ Step 1: Check if the username already exists
                 check_response = send_request({"command": "check_username", "username": uname}, None)
 
-                if check_response["status"] == "error" or check_response["message"] == "User already exists":
-                    
+                if check_response["message"] == "User already exists":
                     print(f"Error: Username '{uname}' is already taken. Please try a different one.")
                     input("Press Enter to continue...")
-
                 else:
                     # ✅ Step 2: Generate and save keys ONLY if the username is available
                     private_key_pem, public_key_pem = generate_rsa_keys()
