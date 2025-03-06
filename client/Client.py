@@ -100,6 +100,20 @@ def prompt_for_pem_save(default_filename):
     root.destroy()
     return file_path
 
+def prompt_for_private_key():
+    """Force the file dialog to the front for selecting a private key."""
+    root = tk.Tk()
+    root.withdraw()  # Hide the root window
+    root.attributes('-topmost', True)  # Ensure it appears in front
+    root.update()  # Force update
+
+    private_key_path = filedialog.askopenfilename(
+        title="Select Private Key File",
+        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+    )
+
+    root.destroy()  # Destroy the root window after selection
+    return private_key_path
 
 
 def prompt_for_save_location(default_filename):
@@ -221,11 +235,7 @@ def main():
                         public_key_pem = response["public_key"]
 
                         # Prompt user to select private key file
-                        print("\nPlease select your private key file.")
-                        private_key_path = filedialog.askopenfilename(
-                            title="Select Private Key File",
-                            filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
-                        )
+                        private_key_path = prompt_for_private_key()
 
                         if private_key_path and os.path.exists(private_key_path):
                             with open(private_key_path, "r") as key_file:
