@@ -6,6 +6,7 @@ import sys
 import tkinter as tk
 from tkinter import filedialog
 import ssl
+import bcrypt
 
 from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
@@ -122,6 +123,14 @@ def prompt_for_save_location(default_filename):
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
 
+def generate_salt():
+    """Generate a random 16-byte salt and return it as a base64 string."""
+    return bcrypt.gensalt().decode()  # ✅ Generate a unique salt
+
+def hash_password(password, salt):
+    """Hash the password using the provided salt."""
+    return bcrypt.hashpw(password.encode(), salt.encode()).decode()
+
 def main():
     logged_in = False
     
@@ -142,7 +151,6 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
-
                 # ✅ Step 1: Check if the username already exists
                 check_response = send_request({"command": "check_username", "username": uname}, None)
 
@@ -150,6 +158,8 @@ def main():
                     print(f"Error: Username '{uname}' is already taken. Please try a different one.")
                     input("Press Enter to continue...")
                 else:
+                    salt = generate_salt()
+                    hashed_pwd = hash_password(pwd, salt)
                     # ✅ Step 2: Generate and save keys ONLY if the username is available
                     private_key_pem, public_key_pem = generate_rsa_keys()
 
@@ -170,7 +180,8 @@ def main():
                     request_data = {
                         "command": "register",
                         "username": uname,
-                        "password": pwd,
+                        "password_hash": hashed_pwd,
+                        "salt": salt,
                         "public_key": public_key_pem
                     }
 
@@ -191,9 +202,15 @@ def main():
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue  # Return to the Welcome page
-
+                salt_response = send_request({"command": "get_salt", "username": uname})
+                if salt_response["status"] != "success":
+                    print("[ERROR] Could not retrieve salt. Login failed.")
+                    input("Press Enter to continue...")
+                    continue
+                salt = salt_response["salt"]
+                hashed_pwd = hash_password(pwd, salt)
                 # Send login request to server (without signing it)
-                response = send_request({"command": "login", "username": uname, "password": pwd})
+                response = send_request({"command": "login", "username": uname, "password_hash": hashed_pwd})
 
                 # print("DEBUG: Server response:", response)
 
@@ -272,7 +289,7 @@ def main():
                 else:
                     x, y = int(x), int(y)
                     if 0 <= x <= 99999 and 0 <= y <= 99999:
-                        response = send_request({"command": "update_location", "user": uname, "x": x, "y": y}, private_key_pem)
+                        response = send_request({"command": "update_location", "username": uname, "x": x, "y": y}, private_key_pem)
                         print(response["message"])
                     else:
                         print("Error: Coordinates must be within the range 0-99999.")
@@ -290,7 +307,7 @@ def main():
                # else:
                #     print(response["message"])
                # input("Press Enter to continue...")
-                response = send_request({"command": "check_proximity", "user": uname}, private_key_pem)
+                response = send_request({"command": "check_proximity", "username": uname}, private_key_pem)
     
                 if response["status"] == "success":
                     print(f"Your current location: X={response['x']}, Y={response['y']}")
@@ -308,7 +325,7 @@ def main():
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request({"command": "add_friend", "user": uname, "friend": friend_name}, private_key_pem)
+                response = send_request({"command": "add_friend", "username": uname, "friend": friend_name}, private_key_pem)
 
                 # print("DEBUG: Server response:", response)  # Debugging
 
@@ -333,7 +350,7 @@ def main():
                     continue
 
                 # Fetch recipient's public key
-                response = send_request({"command": "get_public_key", "user": recipient}, private_key_pem)
+                response = send_request({"command": "get_public_key", "username": recipient}, private_key_pem)
                 if response["status"] != "success":
                     print("Error: Unable to fetch recipient's public key.")
                     input("Press Enter to continue...")
@@ -371,7 +388,7 @@ def main():
                         continue  # Return to menu
 
                 # Now proceed to decrypt messages
-                response = send_request({"command": "view_inbox", "user": uname}, private_key_pem)
+                response = send_request({"command": "view_inbox", "username": uname}, private_key_pem)
 
                 if response["status"] == "success":
                     inbox_messages = response.get("inbox", [])
@@ -402,14 +419,14 @@ def main():
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request({"command": "remove_friend", "user": uname, "friend": friend}, private_key_pem)
+                    response = send_request({"command": "remove_friend", "username": uname, "friend": friend}, private_key_pem)
                     print(response["message"])
 
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
-                    response = send_request({"command": "clear_messages", "user": uname}, private_key_pem)
+                    response = send_request({"command": "clear_messages", "username": uname}, private_key_pem)
                     print(response["message"])
                     logged_in = False
                     uname = None

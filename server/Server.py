@@ -49,6 +49,7 @@ cursor.execute('''
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         username TEXT UNIQUE NOT NULL,
         password_hash TEXT NOT NULL,
+        salt TEXT NOT NULL,
         public_key TEXT NOT NULL
     )
 ''')
@@ -176,23 +177,21 @@ def handle_client(client_socket):
 
 def process_request(request):
     command = request.get("command")
-    username = request.get("user")
+    username = request.get("username")
     signature = request.get("signature")
 
     print(f"Command received: {command} by user {username}.\n")
 
     # ✅ Handle registration requests first (NO signature needed)
     if command == "register":
-        username, password, public_key = request["username"], request["password"], request["public_key"]
+        username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
 
-        if not username or not password or not public_key:
+        if not username or not password_hash or not salt or not public_key:
             return {"status": "error", "message": "Username, password, and public key cannot be empty"}
 
-        password_hash = hash_password(password)
-
         try:
-            cursor.execute("INSERT INTO users (username, password_hash, public_key) VALUES (?, ?, ?)", 
-                           (username, password_hash, public_key))
+            cursor.execute("INSERT INTO users (username, password_hash, salt, public_key) VALUES (?, ?, ?, ?)", 
+                           (username, password_hash, salt, public_key))
             conn.commit()
             return {"status": "success", "message": "Registration successful"}
         except sqlite3.IntegrityError:
@@ -200,15 +199,27 @@ def process_request(request):
         except Exception as e:
             return {"status": "error", "message": f"Database error: {str(e)}"}
 
+    elif command == "get_salt":
+        username = request["username"]
+        
+        cursor.execute("SELECT salt FROM users WHERE username=?", (username,))
+        result = cursor.fetchone()
+
+        if result:
+            return {"status": "success", "salt": result[0]}  # ✅ Send the stored salt
+
+        return {"status": "error", "message": "User not found"}
+
+    
     # ✅ Handle login requests separately (NO signature verification needed)
-    if command == "login":
-        username, password = request["username"], request["password"]
+    elif command == "login":
+        username, password_hash = request["username"], request["password_hash"]
         
         # Retrieve user credentials from database
         cursor.execute("SELECT password_hash, public_key FROM users WHERE username=?", (username,))
         user = cursor.fetchone()
 
-        if user and verify_password(password, user[0]):
+        if user and user[0]==password_hash:
             return {
                 "status": "success",
                 "message": "Login successful",
@@ -223,7 +234,7 @@ def process_request(request):
         if not signature:
             return {"status": "error", "message": "Missing authentication signature"}
         
-        username = request["user"]
+        username = request["username"]
 
         # ✅ Retrieve the user's public key
         cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
@@ -247,7 +258,7 @@ def process_request(request):
             return {"status": "error", "message": "Signature verification failed"}
     
         if command == "check_message_history":
-            user_id = get_user_id(request["user"])
+            user_id = get_user_id(request["username"])
             friend_id = get_user_id(request["friend"])
 
             if not user_id or not friend_id:
@@ -267,7 +278,7 @@ def process_request(request):
 
         
         elif command == "add_friend":
-            user_id = get_user_id(request["user"])
+            user_id = get_user_id(request["username"])
             friend_id = get_user_id(request["friend"])
 
             if not user_id or not friend_id:
@@ -304,19 +315,10 @@ def process_request(request):
 
                     return {"status": "success", "message": f"Friendship accepted! Public keys exchanged."}
 
-                # ✅ If the existing status is "acquaintance", upgrade it to "pending"
-                elif friendship_status == "acquaintance":
-                    cursor.execute(
-                        "UPDATE friendships SET status='pending' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (user_id, friend_id, friend_id, user_id)
-                    )
-                    conn.commit()
-                    return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-
+                
                 return {"status": "error", "message": "Friend request already sent or already friends."}
 
             # ✅ If no prior friendship exists, insert a new pending request
-            print("here")
             cursor.execute(
             "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
             (user_id, friend_id)
@@ -326,7 +328,7 @@ def process_request(request):
             return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
             
         elif command == "update_location":
-            user_id = get_user_id(request["user"])
+            user_id = get_user_id(request["username"])
             if user_id:
                 x, y = request["x"], request["y"]
                 cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
@@ -351,7 +353,7 @@ def process_request(request):
            # nearby_users = [row[0] for row in cursor.fetchall() if row[0] != request["user"]]
 
            # return {"status": "success", "nearby_users": nearby_users}
-            username = request["user"]
+            username = request["username"]
             file_path = f"{username}_location.json"
 
             # Check if the location file exists
@@ -418,7 +420,7 @@ def process_request(request):
                 return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
         
         elif command == "view_inbox":
-            user_id = get_user_id(request["user"])
+            user_id = get_user_id(request["username"])
             if user_id:
                 cursor.execute("SELECT users.username, message, timestamp FROM messages JOIN users ON messages.sender_id = users.id WHERE recipient_id=? ORDER BY timestamp DESC", (user_id,))
                 messages = [{"from": row[0], "message": row[1], "timestamp": row[2]} for row in cursor.fetchall()]
@@ -426,7 +428,7 @@ def process_request(request):
             return {"status": "error", "message": "User not found"}
 
         elif command == "remove_friend":
-            user_id = get_user_id(request["user"])
+            user_id = get_user_id(request["username"])
             friend_id = get_user_id(request["friend"])
 
             if not user_id or not friend_id:
@@ -449,7 +451,7 @@ def process_request(request):
 
             # In process_request function on the server
         elif command == "clear_messages":
-            user_id = get_user_id(request["user"]) 
+            user_id = get_user_id(request["username"]) 
             if user_id:
                 try:
                     cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
