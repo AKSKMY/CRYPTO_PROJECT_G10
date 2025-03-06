@@ -83,25 +83,6 @@ def send_request(request, private_key_pem=None):
     except Exception as e:
         return {"status": "error", "message": f"Client error: {str(e)}"}
 
-# def send_request(request):
-#     try:
-#         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-#         client.connect(("127.0.0.1", 5555))
-#         client.send(json.dumps(request).encode())
-
-#         response_data = client.recv(4096)
-
-#         if not response_data:
-#             raise ValueError("No response from server")
-
-#         response = json.loads(response_data.decode())
-#         client.close()
-#         return response
-#     except json.JSONDecodeError:
-#         return {"status": "error", "message": "Invalid server response"}
-#     except Exception as e:
-#         return {"status": "error", "message": f"Client error: {str(e)}"}
-
 def prompt_for_pem_save(default_filename):
     """Prompt user to choose a save location for the private key (.pem) file."""
     root = tk.Tk()
@@ -220,18 +201,17 @@ def main():
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
-                    continue  # Return to the Welcome page
+                    continue  # Return to Welcome page
+
                 salt_response = send_request({"command": "get_salt", "username": uname})
                 if salt_response["status"] != "success":
-                    print("[ERROR] Could not retrieve salt. Login failed.")
+                    print("Your username or password might be wrong [ERR_1001]. Login failed.")
                     input("Press Enter to continue...")
                     continue
+
                 salt = salt_response["salt"]
                 hashed_pwd = hash_password(pwd, salt)
-                # Send login request to server (without signing it)
                 response = send_request({"command": "login", "username": uname, "password_hash": hashed_pwd})
-
-                # print("DEBUG: Server response:", response)
 
                 if response["status"] == "success":
                     logged_in = True
@@ -240,43 +220,38 @@ def main():
                     if "public_key" in response:
                         public_key_pem = response["public_key"]
 
-                        # Create a hidden root window and bring it to the front
-                        root = tk.Tk()
-                        root.withdraw()  # Hide the root window
-                        root.attributes('-topmost', True)  # Bring file dialog to the front
-                        root.update()
-
-                        # Prompt user to select their private key
-                        print("Please select your private key file.")
+                        # Prompt user to select private key file
+                        print("\nPlease select your private key file.")
                         private_key_path = filedialog.askopenfilename(
                             title="Select Private Key File",
                             filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
                         )
-
-                        root.destroy() 
 
                         if private_key_path and os.path.exists(private_key_path):
                             with open(private_key_path, "r") as key_file:
                                 private_key_pem = key_file.read()
                             print("Private key loaded successfully.")
 
-                            # Verify the loaded private key
+                            # Verify the private key
                             challenge = "some_random_challenge"  # Replace with actual challenge from server
                             if is_private_key_correct(private_key_pem, public_key_pem, challenge):
                                 print("Private key is correct! Secure transactions enabled.")
                             else:
-                                print("Private key is incorrect!")
+                                print("Private key verification failed!")
                                 input("Press Enter to return to the Welcome page...")
                                 logged_in = False
-                                private_key_pem = None  # Ensure private key is cleared
+                                continue  # Force return to Welcome page
                         else:
-                            print("Warning: No private key selected. Some actions may not work.")
-                            private_key_pem = None  # Ensure private key is set to None
+                            print("No private key selected. You must load your private key to continue.")
+                            input("Press Enter to return to the Welcome page...")
+                            logged_in = False
+                            continue  # Force return to Welcome page
 
                 else:
                     print("Error: Login failed -", response["message"])
                     input("Press Enter to return to the Welcome page...")
                     continue
+
             
             elif choice == "3":
                 break

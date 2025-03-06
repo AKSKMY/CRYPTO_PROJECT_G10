@@ -312,17 +312,6 @@ def process_request(request):
             conn.commit()
 
             return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-            
-        elif command == "update_location":
-            user_id = get_user_id(request["username"])
-            if user_id:
-                x, y = request["x"], request["y"]
-                cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
-                            (user_id, x, y, x, y))
-                save_location(username, x, y)
-                conn.commit()
-                return {"status": "success", "message": "Location updated and saved locally."}
-            return {"status": "error", "message": "User not found"}
 
         elif command == "check_proximity":
            # user_id = get_user_id(request["user"])
