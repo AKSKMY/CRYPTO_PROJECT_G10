@@ -280,15 +280,23 @@ def main():
                 input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
+               # response = send_request({"command": "check_proximity", "user": uname}, private_key_pem)
+               # if response["status"] == "success":
+               #     nearby_users = [user for user in response["nearby_users"] if user != uname]
+               #     if nearby_users:
+               #         print("Nearby users:", ", ".join(nearby_users))
+               #     else:
+               #         print("No users nearby.")
+               # else:
+               #     print(response["message"])
+               # input("Press Enter to continue...")
                 response = send_request({"command": "check_proximity", "user": uname}, private_key_pem)
+    
                 if response["status"] == "success":
-                    nearby_users = [user for user in response["nearby_users"] if user != uname]
-                    if nearby_users:
-                        print("Nearby users:", ", ".join(nearby_users))
-                    else:
-                        print("No users nearby.")
+                    print(f"Your current location: X={response['x']}, Y={response['y']}")
                 else:
                     print(response["message"])
+
                 input("Press Enter to continue...")
 
             elif choice == "3":  # Add Friend

@@ -110,6 +110,21 @@ def verify_signature(public_key_pem, message, signature_hex):
         print(f"Signature verification error: {str(e)}")
         return False
 
+def save_location(username, x, y):
+    """Save user's location to a JSON file named after their username."""
+    location_data = {
+        "username": username,
+        "x_location": x,
+        "y_location": y
+    }
+    file_path = f"{username}_location.json"
+    
+    with open(file_path, "w") as json_file:
+        json.dump(location_data, json_file, indent=4)
+    
+    print(f"Location saved to {file_path}")
+
+
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database
 
@@ -316,25 +331,53 @@ def process_request(request):
                 x, y = request["x"], request["y"]
                 cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
                             (user_id, x, y, x, y))
+                save_location(username, x, y)
                 conn.commit()
-                return {"status": "success", "message": "Location updated"}
+                return {"status": "success", "message": "Location updated and saved locally."}
             return {"status": "error", "message": "User not found"}
 
         elif command == "check_proximity":
-            user_id = get_user_id(request["user"])
-            if not user_id:
-                return {"status": "error", "message": "User not found"}
-            cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (user_id,))
-            user_location = cursor.fetchone()
-            if not user_location:
+           # user_id = get_user_id(request["user"])
+           # if not user_id:
+           #     return {"status": "error", "message": "User not found"}
+           # cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (user_id,))
+           # user_location = cursor.fetchone()
+           # if not user_location:
+           #     return {"status": "error", "message": "Location not set"}
+
+           # x1, y1 = user_location
+           # user_cell = (x1 // 1000, y1 // 1000)
+           # cursor.execute("SELECT users.username FROM locations JOIN users ON locations.user_id = users.id WHERE FLOOR(CAST(x AS INTEGER) / 1000) = ? AND FLOOR(CAST(y AS INTEGER) / 1000) = ?", (user_cell[0], user_cell[1]))
+           # nearby_users = [row[0] for row in cursor.fetchall() if row[0] != request["user"]]
+
+           # return {"status": "success", "nearby_users": nearby_users}
+            username = request["user"]
+            file_path = f"{username}_location.json"
+
+            # Check if the location file exists
+            if not os.path.exists(file_path):
                 return {"status": "error", "message": "Location not set"}
 
-            x1, y1 = user_location
-            user_cell = (x1 // 1000, y1 // 1000)
-            cursor.execute("SELECT users.username FROM locations JOIN users ON locations.user_id = users.id WHERE FLOOR(CAST(x AS INTEGER) / 1000) = ? AND FLOOR(CAST(y AS INTEGER) / 1000) = ?", (user_cell[0], user_cell[1]))
-            nearby_users = [row[0] for row in cursor.fetchall() if row[0] != request["user"]]
+            try:
+                # Load the coordinates from the JSON file
+                with open(file_path, "r") as json_file:
+                    location_data = json.load(json_file)
+                    x = location_data.get("x_location")
+                    y = location_data.get("y_location")
 
-            return {"status": "success", "nearby_users": nearby_users}
+                if x is None or y is None:
+                    return {"status": "error", "message": "Invalid location data"}
+
+                return {
+                    "status": "success",
+                    "message": f"For now i will just display your updated location: X={x}, Y={y}",
+                    "x": x,
+                    "y": y,
+                    "nearby_users": []  # Empty list for now
+                }
+    
+            except Exception as e:
+                return {"status": "error", "message": f"Error reading location data: {str(e)}"}
             
         elif command == "send_message":
             sender_id = get_user_id(request["sender"])
