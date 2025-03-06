@@ -111,20 +111,6 @@ def verify_signature(public_key_pem, message, signature_hex):
         print(f"Signature verification error: {str(e)}")
         return False
 
-def save_location(username, x, y):
-    """Save user's location to a JSON file named after their username."""
-    location_data = {
-        "username": username,
-        "x_location": x,
-        "y_location": y
-    }
-    file_path = f"{username}_location.json"
-    
-    with open(file_path, "w") as json_file:
-        json.dump(location_data, json_file, indent=4)
-    
-    print(f"Location saved to {file_path}")
-
 
 def hash_password(password):
     return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database

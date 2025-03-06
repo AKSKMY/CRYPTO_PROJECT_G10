@@ -102,8 +102,27 @@ def send_request(request, private_key_pem=None):
 #     except Exception as e:
 #         return {"status": "error", "message": f"Client error: {str(e)}"}
 
+def prompt_for_pem_save(default_filename):
+    """Prompt user to choose a save location for the private key (.pem) file."""
+    root = tk.Tk()
+    root.withdraw()  # Hide the root window
+
+    root.attributes("-topmost", True)
+    root.update()
+
+    file_path = filedialog.asksaveasfilename(
+        defaultextension=".pem",
+        initialfile=default_filename,
+        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+    )
+
+    root.destroy()
+    return file_path
+
+
 
 def prompt_for_save_location(default_filename):
+    """Prompt the user to choose a save location for the JSON location file."""
     root = tk.Tk()
     root.withdraw()  # Hide the root window
 
@@ -112,9 +131,9 @@ def prompt_for_save_location(default_filename):
     root.update()
 
     file_path = filedialog.asksaveasfilename(
-        defaultextension=".pem",
+        defaultextension=".json",
         initialfile=default_filename,
-        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
+        filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
     )
 
     root.destroy() 
@@ -167,7 +186,7 @@ def main():
                     print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
 
                     private_key_filename = f"{uname}_private.pem"
-                    private_key_path = prompt_for_save_location(private_key_filename)
+                    private_key_path = prompt_for_pem_save(private_key_filename)
 
                     if private_key_path:
                         with open(private_key_path, "w") as key_file:
@@ -279,42 +298,60 @@ def main():
             choice = input("Select an option: ").strip()
 
             if choice == "1":  # Update Location
-                x = input("Enter X coordinate (0-99999): ").strip()
-                y = input("Enter Y coordinate (0-99999): ").strip()
+                    x = input("Enter X coordinate (0-99999): ").strip()
+                    y = input("Enter Y coordinate (0-99999): ").strip()
 
-                if not x or not y:
-                    print("Error: Coordinates cannot be empty.")
-                elif not x.isdigit() or not y.isdigit():
-                    print("Error: Please enter only numeric values for X and Y.")
-                else:
-                    x, y = int(x), int(y)
-                    if 0 <= x <= 99999 and 0 <= y <= 99999:
-                        response = send_request({"command": "update_location", "username": uname, "x": x, "y": y}, private_key_pem)
-                        print(response["message"])
+                    if not x or not y:
+                        print("Error: Coordinates cannot be empty.")
+                    elif not x.isdigit() or not y.isdigit():
+                        print("Error: Please enter only numeric values for X and Y.")
                     else:
-                        print("Error: Coordinates must be within the range 0-99999.")
+                        x, y = int(x), int(y)
+                        if 0 <= x <= 99999 and 0 <= y <= 99999:
+                            location_data = {
+                                "username": uname,
+                                "x_location": x,
+                                "y_location": y
+                            }
 
-                input("Press Enter to continue...")
+                            # ✅ Define save directory and ensure it exists
+                            save_directory = "proximity_json"
+                            os.makedirs(save_directory, exist_ok=True)  # Create directory if not exists
+
+                            # ✅ Save file in /proximity_json and overwrite if exists
+                            save_path = os.path.join(save_directory, f"{uname}_location.json")
+                            with open(save_path, "w") as json_file:
+                                json.dump(location_data, json_file, indent=4)
+
+                            print(f"Location successfully saved to: {save_path}")  # ✅ Auto-saved
+
+                        else:
+                            print("Error: Coordinates must be within the range 0-99999.")
+
+                    input("Press Enter to continue...")
 
             elif choice == "2":  # Display Proximity
-               # response = send_request({"command": "check_proximity", "user": uname}, private_key_pem)
-               # if response["status"] == "success":
-               #     nearby_users = [user for user in response["nearby_users"] if user != uname]
-               #     if nearby_users:
-               #         print("Nearby users:", ", ".join(nearby_users))
-               #     else:
-               #         print("No users nearby.")
-               # else:
-               #     print(response["message"])
-               # input("Press Enter to continue...")
-                response = send_request({"command": "check_proximity", "username": uname}, private_key_pem)
-    
-                if response["status"] == "success":
-                    print(f"Your current location: X={response['x']}, Y={response['y']}")
+                save_directory = "proximity_json"
+                file_path = os.path.join(save_directory, f"{uname}_location.json")  # ✅ Auto-fetch file
+
+                if not os.path.exists(file_path):
+                    print(f"Error: No location file found at {file_path}. Please update your location first.")
                 else:
-                    print(response["message"])
+                    try:
+                        with open(file_path, "r") as json_file:
+                            location_data = json.load(json_file)
+                            x, y = location_data.get("x_location"), location_data.get("y_location")
+
+                        if x is None or y is None:
+                            print("Error: Invalid location data.")
+                        else:
+                            print(f"Your last saved location: X={x}, Y={y}")
+
+                    except json.JSONDecodeError:
+                        print("Error: Corrupt location file. Please update your location.")
 
                 input("Press Enter to continue...")
+
 
             elif choice == "3":  # Add Friend
                 friend_name = input("Enter the username of the friend you want to add: ").strip()
