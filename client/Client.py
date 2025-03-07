@@ -229,10 +229,12 @@ def main():
 
                 if response["status"] == "success":
                     logged_in = True
-                    username = uname
 
                     if "public_key" in response:
                         public_key_pem = response["public_key"]
+
+                        print("\nPassword accepted! Please upload the private key for authentication.")
+
 
                         # Prompt user to select private key file
                         private_key_path = prompt_for_private_key()
