@@ -248,6 +248,9 @@ def main():
                             challenge = "some_random_challenge"  # Replace with actual challenge from server
                             if is_private_key_correct(private_key_pem, public_key_pem, challenge):
                                 print("Private key is correct! Secure transactions enabled.")
+
+                                # Ensure the user presses Enter before proceeding to the user page
+                                input("Press Enter to proceed to the user page...")
                             else:
                                 print("Private key verification failed!")
                                 input("Press Enter to return to the Welcome page...")
