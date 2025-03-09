@@ -60,11 +60,11 @@ def process_proximity_request(request, client_socket):
     enc_y2 = paillier_public_key_1.encrypt(y2)
     enc_x2_sq = enc_x2*x2
     enc_y2_sq = enc_y2*y2
-    enc_2_x1_x2 = enc_x1 * x2
-    enc_2_y1_y2 = enc_y1 * y2
+    enc_x1_x2 = enc_x1 * x2
+    enc_y1_y2 = enc_y1 * y2
     # Compute encrypted Euclidean distance: (x1 - x2)^2 + (y1 - y2)^2
-    enc_dx2 = enc_x1_sq - 2*enc_2_x1_x2 + enc_x2_sq
-    enc_dy2 = enc_y1_sq - 2*enc_2_y1_y2 + enc_y2_sq
+    enc_dx2 = enc_x1_sq - 2*enc_x1_x2 + enc_x2_sq
+    enc_dy2 = enc_y1_sq - 2*enc_y1_y2 + enc_y2_sq
     enc_distance = enc_dx2 + enc_dy2  # Final encrypted squared Euclidean distance
     # Send the result back to User1 via the server
     response = {
