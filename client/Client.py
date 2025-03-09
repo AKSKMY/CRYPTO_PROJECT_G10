@@ -5,99 +5,170 @@ import os
 import sys
 import tkinter as tk
 from tkinter import filedialog
-import ssl
 import bcrypt
-
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives import serialization
-
+import threading
+import traceback
+import time
+from phe import generate_paillier_keypair, paillier
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from algorithms.rsa_private_auth import is_private_key_correct
+
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
 
-from algorithms.encryption_utils import encrypt_message as encrypt_aes, decrypt_message as decrypt_aes
+# Store Paillier key pair
+paillier_public_key = None
+paillier_private_key = None
 
+def generate_salt():
+    """Generate a random 16-byte salt and return it as a base64 string."""
+    return bcrypt.gensalt().decode()  # ✅ Generate a unique salt
 
-def sign_message(private_key_pem, message):
-    """Sign a message with the client's private key."""
-    private_key = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
-    signature = private_key.sign(
-        message.encode(),
-        padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
-        hashes.SHA256()
-    )
-    return signature.hex()
+def hash_password(password, salt):
+    """Hash the password using the provided salt."""
+    return bcrypt.hashpw(password.encode(), salt.encode()).decode()
 
-def send_request(request, private_key_pem=None):
+def process_proximity_request(request, client_socket):
+    """Computes the encrypted Euclidean distance for proximity checking and sends it back."""
+    
+    #print(f"request = {request}")
+    username = request["username"]
+    user2 = request["user2"]
+    public_key_n = request["public_key"]  # Received from User1
+    
+        # Load User2's saved location
+    save_path = f"proximity_json/{user2}_location.json"
+    if not os.path.exists(save_path):
+        print("[ERROR] Location not found. Cannot process proximity request.")
+        return
+
+    with open(save_path, "r") as json_file:
+        location_data = json.load(json_file)
+
+    x2, y2 = location_data["x_location"], location_data["y_location"]
+    paillier_public_key_1 = paillier.PaillierPublicKey(int(public_key_n))
+    # Convert received encrypted values to Paillier format
+    enc_x1 = paillier.EncryptedNumber(paillier_public_key_1,int(request["enc_x1"]))
+    enc_y1 = paillier.EncryptedNumber(paillier_public_key_1,int(request["enc_y1"]))
+    enc_x1_sq = paillier.EncryptedNumber(paillier_public_key_1,int(request["enc_x1_sq"]))
+    enc_y1_sq = paillier.EncryptedNumber(paillier_public_key_1,int(request["enc_y1_sq"]))
+    # Encrypt User2's values using User1's public key
+    enc_x2 = paillier_public_key_1.encrypt(x2)
+    enc_y2 = paillier_public_key_1.encrypt(y2)
+    enc_x2_sq = enc_x2*x2
+    enc_y2_sq = enc_y2*y2
+    enc_2_x1_x2 = enc_x1 * x2
+    enc_2_y1_y2 = enc_y1 * y2
+    # Compute encrypted Euclidean distance: (x1 - x2)^2 + (y1 - y2)^2
+    enc_dx2 = enc_x1_sq - 2*enc_2_x1_x2 + enc_x2_sq
+    enc_dy2 = enc_y1_sq - 2*enc_2_y1_y2 + enc_y2_sq
+    enc_distance = enc_dx2 + enc_dy2  # Final encrypted squared Euclidean distance
+    # Send the result back to User1 via the server
+    response = {
+            "command": "send_encrypted_distance",
+            "user1": username,
+            "user2": user2,
+            "enc_distance": enc_distance.ciphertext()
+        }
+    #send_request(client_socket,response)
+    client_socket.send(json.dumps(response).encode())
+    
+def handle_encrypted_distance(response):
+    """Decrypt and process the encrypted distance received from a friend."""
     try:
-        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        user2 = response["user2"]
+        enc_distance_ciphertext = response["enc_distance"]  # ✅ Convert back to int
 
-        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        context.check_hostname = False
-        context.verify_mode = ssl.CERT_NONE  # Disable certificate verification for testing
+        # ✅ Reconstruct the EncryptedNumber
+        enc_distance = paillier.EncryptedNumber(paillier_public_key, enc_distance_ciphertext)
 
-        client = context.wrap_socket(client)
-        client.connect(("127.0.0.1", 5555))
+        # ✅ Decrypt the value
+        decrypted_distance = paillier_private_key.decrypt(enc_distance)
 
-        request_string = json.dumps(request)
+        # ✅ Square root to get the actual Euclidean distance
+        distance = decrypted_distance ** 0.5
 
-        # Only sign the message if a private key is available AND it's not a registration request
-        if private_key_pem and request["command"] not in ["register", "login"]:
-            try:
-                signature = sign_message(private_key_pem, request_string)
-                request["signature"] = signature  # Attach signature to request
-                # print("Request signed successfully")
-            except Exception as e:
-                print(f"Error signing message: {e}")
-                return {"status": "error", "message": "Signing error"}
+        if distance < 1000:
+            print(f"{user2} is close!")
         else:
-            request["signature"] = None  # Explicitly indicate no signature
+            print(f"{user2} is far!")
 
-        request_json = json.dumps(request)
-        # print(f"Sending request: {request}")  # Debugging output
+    except Exception as e:
+        print(f"[CLIENT ERROR] Failed to process encrypted distance: {e}")
+        traceback.print_exc()  # ✅ Print detailed error log
+def receive_messages(client_socket):
+    """Continuously listen for incoming messages from the server without blocking."""
+    client_socket.settimeout(5)  # ✅ Prevents indefinite blocking
 
-        # 🔒 Encrypt the request before sending
-        encrypted_request = encrypt_aes(request_json)
-        client.sendall(encrypted_request.encode())
-        # client.send(json.dumps(request).encode())
+    try:
+        while True:
+            try:
+                response_data = client_socket.recv(4096)
 
-        response_data = client.recv(4096)
-        # if not response_data:
-        #     return {"status": "error", "message": "No response from server"}
+                if not response_data:
+                    print("[CLIENT] Server closed connection. Stopping message listener.")
+                    break  # ✅ Exit the loop if the server closes the connection
+                
+                response = json.loads(response_data.decode())  # ✅ Decode response
+                
+                status = response.get("status")
+                if status == "error":
+                        print(response["message"])
+                command = response.get("command")
 
-        # response = json.loads(response_data.decode())
+                # ✅ Handle different command types
+                if command == "login":
+                    continue  # Skip login responses
 
-        # print(f"Received response: {response}")  # Debugging output
+                elif command == "check_proximity":
+                    process_proximity_request(response, client_socket)
+
+                elif command == "send_encrypted_distance":
+                    handle_encrypted_distance(response)
+    
+
+            
+
+            except json.JSONDecodeError as e:
+                print(f"[CLIENT ERROR] JSON Decode Error: {e}")
+            except socket.timeout:  
+                pass  # ✅ Prevents blocking on recv() if no data is received
+            except socket.error as e:
+                print(f"[CLIENT ERROR] Socket error: {e}")
+                break  # ✅ Exit loop on socket failure
+
+    except Exception as e:
+        print(f"[CLIENT ERROR] Unexpected error in receive_messages: {e}")
+        traceback.print_exc()  # ✅ Print full traceback for debugging       
         
-        # 🔓 Decrypt the response
-        decrypted_response = decrypt_aes(response_data.decode())
-        response = json.loads(decrypted_response)
-        client.close()
-        return response
+        
+    
+        
+def send_request(client,request):
+    try:
 
+        client.send(json.dumps(request).encode())
+        response_data = client.recv(4096)
+        if not response_data:
+            print("If not send in send_requsest")
+            raise ValueError("No response from server")
+
+        response = json.loads(response_data.decode())
+        return response
     except json.JSONDecodeError:
         return {"status": "error", "message": "Invalid server response"}
     except Exception as e:
         return {"status": "error", "message": f"Client error: {str(e)}"}
 
-def prompt_for_pem_save(default_filename):
-    """Prompt user to choose a save location for the private key (.pem) file."""
+def prompt_for_save_location(default_filename):
     root = tk.Tk()
     root.withdraw()  # Hide the root window
-
-    root.attributes("-topmost", True)
-    root.update()
-
     file_path = filedialog.asksaveasfilename(
         defaultextension=".pem",
         initialfile=default_filename,
         filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
     )
-
-    root.destroy()
     return file_path
 
 def prompt_for_private_key():
@@ -115,42 +186,87 @@ def prompt_for_private_key():
     root.destroy()  # Destroy the root window after selection
     return private_key_path
 
-
-def prompt_for_save_location(default_filename):
-    """Prompt the user to choose a save location for the JSON location file."""
-    root = tk.Tk()
-    root.withdraw()  # Hide the root window
-
-    # ✅ Force window to the front
-    root.attributes("-topmost", True)
-    root.update()
-
-    file_path = filedialog.asksaveasfilename(
-        defaultextension=".json",
-        initialfile=default_filename,
-        filetypes=[("JSON files", "*.json"), ("All files", "*.*")]
-    )
-
-    root.destroy() 
-    return file_path
-
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
 
-def generate_salt():
-    """Generate a random 16-byte salt and return it as a base64 string."""
-    return bcrypt.gensalt().decode()  # ✅ Generate a unique salt
+def check_proximity(username, client_socket):
+    """Encrypts and sends location to check proximity with friends."""
+    global paillier_public_key, paillier_private_key
 
-def hash_password(password, salt):
-    """Hash the password using the provided salt."""
-    return bcrypt.hashpw(password.encode(), salt.encode()).decode()
+    # Generate a new Paillier key pair for this session
+    paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=256)
+
+    # Load user's saved location
+    save_path = f"proximity_json/{username}_location.json"
+    if not os.path.exists(save_path):
+        print("[ERROR] Location not found. Please update your location first.")
+        return
+
+    with open(save_path, "r") as json_file:
+        location_data = json.load(json_file)
+
+    x1, y1 = location_data["x_location"], location_data["y_location"]
+    # Encrypt values using Paillier
+    enc_x1 = paillier_public_key.encrypt(x1)
+    enc_y1 =  paillier_public_key.encrypt(y1)
+    enc_x1_sq = enc_x1 * x1
+    enc_y1_sq = enc_y1 * y1
+    # Prepare request to send encrypted values to friends
+    request = {
+        "command": "check_proximity",
+        "username": username,
+        "public_key": str(paillier_public_key.n),
+        "enc_x1": str(enc_x1.ciphertext()),
+        "enc_y1": str(enc_y1.ciphertext()),
+        "enc_x1_sq": str(enc_x1_sq.ciphertext()),
+        "enc_y1_sq": str(enc_y1_sq.ciphertext()),
+        "user2": ''
+    }
+    
+    send_request(client_socket, request)
+
+def update_location(uname):
+    x = input("Enter X coordinate (0-99999): ").strip()
+    y = input("Enter Y coordinate (0-99999): ").strip()
+
+    if not x or not y:
+        print("Error: Coordinates cannot be empty.")
+    elif not x.isdigit() or not y.isdigit():
+        print("Error: Please enter only numeric values for X and Y.")
+    else:
+        x, y = int(x), int(y)
+        if 0 <= x <= 99999 and 0 <= y <= 99999:
+            location_data = {
+                    "username": uname,
+                    "x_location": x,
+                    "y_location": y
+                }
+
+            # ✅ Define save directory and ensure it exists
+            save_directory = "proximity_json"
+            os.makedirs(save_directory, exist_ok=True)  # Create directory if not exists
+
+                # ✅ Save file in /proximity_json and overwrite if exists
+            save_path = os.path.join(save_directory, f"{uname}_location.json")
+            with open(save_path, "w") as json_file:
+                json.dump(location_data, json_file, indent=4)
+
+            print(f"Location successfully saved to: {save_path}")  # ✅ Auto-saved
+
+        else:
+            print("Error: Coordinates must be within the range 0-99999.")
+
+        input("Press Enter to continue...")
+
 
 def main():
     logged_in = False
+    username = None
+    private_key = None  # Store private key after login
     
     while True:
-        clear_screen()
         if not logged_in:
+            clear_screen()
             print("=== Welcome to Group 10 Crypto Project ===")
             print("1. Register")
             print("2. Login")
@@ -160,112 +276,114 @@ def main():
             if choice == "1":  # Register
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
-
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
                     continue
-                # ✅ Step 1: Check if the username already exists
-                check_response = send_request({"command": "check_username", "username": uname}, None)
+                salt = generate_salt()
+                hashed_pwd = hash_password(pwd, salt)
+                # In main() method, inside the registration section
+                private_key_pem, public_key_pem = generate_rsa_keys()
 
-                if check_response["message"] == "User already exists":
-                    print(f"Error: Username '{uname}' is already taken. Please try a different one.")
-                    input("Press Enter to continue...")
+                # Prompt user with a print statement about saving the private key
+                print(f"\nPlease save your private key securely. This key is unique to your account.")
+                print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
+
+                # Save private key to a file specific to the user
+                private_key_filename = f"{uname}_private.pem"
+                private_key_path = prompt_for_save_location(private_key_filename)
+
+                if private_key_path:
+                    with open(private_key_path, "w") as key_file:
+                        key_file.write(private_key_pem)
+                    print(f"Private key saved to: {private_key_path}")
                 else:
-                    salt = generate_salt()
-                    hashed_pwd = hash_password(pwd, salt)
-                    # ✅ Step 2: Generate and save keys ONLY if the username is available
-                    private_key_pem, public_key_pem = generate_rsa_keys()
+                    print("Warning: Private key not saved. Store it securely!")
 
-                    print(f"\nPlease save your private key securely. This key is unique to your account.")
-                    print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
+                # Register user with public key
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect(("127.0.0.1", 5555))
+                response = send_request(client,{
+                    "command": "register",
+                    "username": uname,
+                    "password_hash": hashed_pwd,
+                    "salt": salt,
+                    "public_key": public_key_pem
+                })
+                print(response["message"])
+                client.close()
+                if response["status"] == "success":
+                    private_key = private_key_pem  # Store in memory for use
+                    print("Registration successful. Please log in now.")
+                    input("Press Enter to continue...")  # Wait for user input
+                    
+                    continue  # Return to the main menu after registration
 
-                    private_key_filename = f"{uname}_private.pem"
-                    private_key_path = prompt_for_pem_save(private_key_filename)
-
-                    if private_key_path:
-                        with open(private_key_path, "w") as key_file:
-                            key_file.write(private_key_pem)
-                        print(f"Private key saved to: {private_key_path}")
-                    else:
-                        print("Warning: Private key not saved. Store it securely!")
-
-                    # ✅ Step 3: Register user with public key
-                    request_data = {
-                        "command": "register",
-                        "username": uname,
-                        "password_hash": hashed_pwd,
-                        "salt": salt,
-                        "public_key": public_key_pem
-                    }
-
-                    response = send_request(request_data, None)  # No private key needed for registration
-
-                    if "status" in response and response["status"] == "success":
-                        print("Registration successful. Please log in now.")
-                    else:
-                        print(f"Error: Registration failed - {response.get('message', 'Unknown error')}")
-
-                    input("Press Enter to continue...")
-
+            
             elif choice == "2":  # Login
                 uname = input("Enter username: ").strip()
                 pwd = getpass.getpass("Enter password: ").strip()
-
+                
                 if not uname or not pwd:
                     print("Error: Username and password cannot be empty.")
                     input("Press Enter to continue...")
-                    continue  # Return to Welcome page
+                    continue  # Return to the Welcome page
+                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                client.connect(("127.0.0.1", 5555))
+                salt_response = send_request(client,{"command": "get_salt", "username": uname})
 
-                salt_response = send_request({"command": "get_salt", "username": uname})
                 if salt_response["status"] != "success":
-                    print("Your username or password might be wrong [ERR_1001]. Login failed.")
+                    print("[ERROR] Could not retrieve salt. Login failed.")
                     input("Press Enter to continue...")
                     continue
-
                 salt = salt_response["salt"]
                 hashed_pwd = hash_password(pwd, salt)
-                response = send_request({"command": "login", "username": uname, "password_hash": hashed_pwd})
+                # Send login request to server
+                response = send_request(client,{"command": "login", "username": uname, "password_hash": hashed_pwd})
+
+                # Debug: Print the full response from the server
+                #print("DEBUG: Server response:", response)  # This will print the entire response to check its structure
 
                 if response["status"] == "success":
-                    logged_in = True
+                    username = uname
 
+                    # Ensure that the response contains "public_key"
                     if "public_key" in response:
                         public_key_pem = response["public_key"]
 
+                        # Proceed with private key selection and verification
                         print("\nPassword accepted! Please upload the private key for authentication.")
-
-
-                        # Prompt user to select private key file
                         private_key_path = prompt_for_private_key()
+    
 
                         if private_key_path and os.path.exists(private_key_path):
                             with open(private_key_path, "r") as key_file:
                                 private_key_pem = key_file.read()
                             print("Private key loaded successfully.")
 
-                            # Verify the private key
+                            # Verify the loaded private key
                             challenge = "some_random_challenge"  # Replace with actual challenge from server
                             if is_private_key_correct(private_key_pem, public_key_pem, challenge):
-                                print("Private key is correct! Secure transactions enabled.")
-
-                                # Ensure the user presses Enter before proceeding to the user page
-                                input("Press Enter to proceed to the user page...")
-                            else:
-                                print("Private key verification failed!")
+                                print("Private key is correct!")
+                                logged_in = True
                                 input("Press Enter to return to the Welcome page...")
+                            else:
+                                print("Private key is incorrect!")
+                                input("Press Enter to return to the login page...")
                                 logged_in = False
-                                continue  # Force return to Welcome page
                         else:
-                            print("No private key selected. You must load your private key to continue.")
-                            input("Press Enter to return to the Welcome page...")
-                            logged_in = False
-                            continue  # Force return to Welcome page
-
+                            private_key_pem = None
+                            print("Warning: No private key selected. Decryption may fail.")
+                    else:
+                        print("Error: Public key not found in server response.")
+                
                 else:
-                    print("Error: Login failed -", response["message"])
+                    print("Error: Login failed -", response["message"])  # Show proper error message
                     input("Press Enter to return to the Welcome page...")
-                    continue
+                    continue  # Return to Welcome page
+                
+
+
 
             
             elif choice == "3":
@@ -277,7 +395,8 @@ def main():
 
         else:
             clear_screen()
-            print(f"=== Logged in as: {uname} ===")
+            print(f"=== Logged in as: {username} ===")
+            threading.Thread(target=receive_messages, args=(client,), daemon=True).start()
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend")
@@ -288,73 +407,23 @@ def main():
             choice = input("Select an option: ").strip()
 
             if choice == "1":  # Update Location
-                    x = input("Enter X coordinate (0-99999): ").strip()
-                    y = input("Enter Y coordinate (0-99999): ").strip()
-
-                    if not x or not y:
-                        print("Error: Coordinates cannot be empty.")
-                    elif not x.isdigit() or not y.isdigit():
-                        print("Error: Please enter only numeric values for X and Y.")
-                    else:
-                        x, y = int(x), int(y)
-                        if 0 <= x <= 99999 and 0 <= y <= 99999:
-                            location_data = {
-                                "username": uname,
-                                "x_location": x,
-                                "y_location": y
-                            }
-
-                            # ✅ Define save directory and ensure it exists
-                            save_directory = "proximity_json"
-                            os.makedirs(save_directory, exist_ok=True)  # Create directory if not exists
-
-                            # ✅ Save file in /proximity_json and overwrite if exists
-                            save_path = os.path.join(save_directory, f"{uname}_location.json")
-                            with open(save_path, "w") as json_file:
-                                json.dump(location_data, json_file, indent=4)
-
-                            print(f"Location successfully saved to: {save_path}")  # ✅ Auto-saved
-
-                        else:
-                            print("Error: Coordinates must be within the range 0-99999.")
-
-                    input("Press Enter to continue...")
+                update_location(username)
 
             elif choice == "2":  # Display Proximity
-                save_directory = "proximity_json"
-                file_path = os.path.join(save_directory, f"{uname}_location.json")  # ✅ Auto-fetch file
-
-                if not os.path.exists(file_path):
-                    print(f"Error: No location file found at {file_path}. Please update your location first.")
-                else:
-                    try:
-                        with open(file_path, "r") as json_file:
-                            location_data = json.load(json_file)
-                            x, y = location_data.get("x_location"), location_data.get("y_location")
-
-                        if x is None or y is None:
-                            print("Error: Invalid location data.")
-                        else:
-                            print(f"Your last saved location: X={x}, Y={y}")
-
-                    except json.JSONDecodeError:
-                        print("Error: Corrupt location file. Please update your location.")
-
-                input("Press Enter to continue...")
-
-
+                check_proximity(username, client)
+                time.sleep(0.1)
+                input("Press enter to continue...\n")
             elif choice == "3":  # Add Friend
                 friend_name = input("Enter the username of the friend you want to add: ").strip()
 
                 if not friend_name:
                     print("Error: Friend username cannot be empty.")
-                    input("Press Enter to continue...")
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request({"command": "add_friend", "username": uname, "friend": friend_name}, private_key_pem)
+                response = send_request(client,{"command": "add_friend", "user": username, "friend": friend_name})
 
-                # print("DEBUG: Server response:", response)  # Debugging
+                #print("DEBUG: Server response:", response)  # Debugging
 
                 if response["status"] == "success":
                     # If a message history exists, proceed with adding the friend
@@ -377,7 +446,7 @@ def main():
                     continue
 
                 # Fetch recipient's public key
-                response = send_request({"command": "get_public_key", "username": recipient}, private_key_pem)
+                response = send_request({"command": "get_public_key", "user": recipient})
                 if response["status"] != "success":
                     print("Error: Unable to fetch recipient's public key.")
                     input("Press Enter to continue...")
@@ -388,10 +457,10 @@ def main():
 
                 response = send_request({
                     "command": "send_message",
-                    "sender": uname,
+                    "sender": username,
                     "recipient": recipient,
                     "message": encrypted_message
-                }, private_key_pem)
+                })
                 print(response["message"])
                 input("Press Enter to continue...")
 
@@ -415,7 +484,7 @@ def main():
                         continue  # Return to menu
 
                 # Now proceed to decrypt messages
-                response = send_request({"command": "view_inbox", "username": uname}, private_key_pem)
+                response = send_request({"command": "view_inbox", "user": username})
 
                 if response["status"] == "success":
                     inbox_messages = response.get("inbox", [])
@@ -440,27 +509,28 @@ def main():
 
                 input("Press Enter to continue...")
 
-
             elif choice == "6":  # Remove Friend
                 friend = input("Enter friend's username to remove: ").strip()
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request({"command": "remove_friend", "username": uname, "friend": friend}, private_key_pem)
+                    response = send_request(client,{"command": "remove_friend", "user": username, "friend": friend})
                     print(response["message"])
 
                 input("Press Enter to continue...")
 
             elif choice == "7":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
-                    response = send_request({"command": "clear_messages", "username": uname}, private_key_pem)
+                    response = send_request(client,{"command": "clear_messages", "username": username})
                     print(response["message"])
+                    response = send_request(client,{"command": "logout", "username": username})
                     logged_in = False
-                    uname = None
+                    username = None
+                    print("Logged out successfully.")
+                    input("Press Enter to continue...")
                 else:
                     print("Error: No user logged in.")
-                print("Logged out successfully.")
-                input("Press Enter to continue...")
+                
 
 
 if __name__ == "__main__":

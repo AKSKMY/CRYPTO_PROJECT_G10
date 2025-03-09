@@ -5,41 +5,19 @@ import sqlite3
 import bcrypt
 import sys
 import signal
-import ssl
-import os
+import select
 
-from cryptography.hazmat.primitives.asymmetric import padding
-from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives import serialization
-from cryptography.exceptions import InvalidSignature
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
-from algorithms.encryption_utils import encrypt_message, decrypt_message
-
-# server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-# server.bind(("127.0.0.1", 5555))
-# server.listen(5)
-
-# Load SSL certificate and private key (Generate using OpenSSL or self-signed for testing)
-server_cert = "server/server_cert.pem"
-server_key = "server/server_key.pem"
-
-# Create an SSL context
-context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-context.load_cert_chain(certfile=server_cert, keyfile=server_key)
-
-# Create and wrap the server socket
+def is_socket_valid(sock):
+    readable, writable, _ = select.select([sock], [sock], [], 0)
+    return bool(readable or writable)
 server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 server.bind(("127.0.0.1", 5555))
 server.listen(5)
 
-# Wrap socket with SSL
-server = context.wrap_socket(server, server_side=True)
-
-print("Secure server started on port 5555...")
-
 conn = sqlite3.connect("proximity.db", check_same_thread=False)
 cursor = conn.cursor()
+
+active_clients = {}  
 
 shutdown = False
 
@@ -51,15 +29,6 @@ cursor.execute('''
         password_hash TEXT NOT NULL,
         salt TEXT NOT NULL,
         public_key TEXT NOT NULL
-    )
-''')
-
-cursor.execute('''
-    CREATE TABLE IF NOT EXISTS locations (
-        user_id INTEGER PRIMARY KEY,
-        x INTEGER NOT NULL,
-        y INTEGER NOT NULL,
-        FOREIGN KEY (user_id) REFERENCES users(id)
     )
 ''')
 
@@ -92,86 +61,38 @@ cursor.execute('''
 
 conn.commit()
 
-def verify_signature(public_key_pem, message, signature_hex):
-    """Verify the digital signature of a request."""
-    try:
-        public_key = serialization.load_pem_public_key(public_key_pem.encode())
-        signature = bytes.fromhex(signature_hex)
-
-        public_key.verify(
-            signature,
-            message.encode(),
-            padding.PSS(mgf=padding.MGF1(hashes.SHA256()), salt_length=padding.PSS.MAX_LENGTH),
-            hashes.SHA256()
-        )
-        return True
-    except InvalidSignature:
-        return False
-    except Exception as e:
-        print(f"Signature verification error: {str(e)}")
-        return False
-
-
-def hash_password(password):
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode() # decode() to convert bytes to string to store in database
-
-def verify_password(password, password_hash):
-    return bcrypt.checkpw(password.encode(), password_hash.encode()) # encode() to convert to bytes for comparison
-
 # Function to fetch user ID by username
 def get_user_id(username):
     cursor.execute("SELECT id FROM users WHERE username=?", (username,))
     user = cursor.fetchone()
     return user[0] if user else None
 
-#users = {}  # {username: {"password": "pass", "friends": set(), "location": (None, None), "inbox": [], "past_grids": set(), "messaged": set()}}
-
 def handle_client(client_socket):
     while True:
         try:
-            encrypted_data = client_socket.recv(4096).decode()
-            if not encrypted_data:
-                print("Received empty request. Closing connection.")
+            data = client_socket.recv(1024).decode().strip()  # Strip spaces and newlines
+            if not data:
+                #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
             
-            # print(f"Raw request received: {data}")  # Debugging log
-
-            # 🔓 Decrypt the request
-            decrypted_data = decrypt_message(encrypted_data)
-            # print(f"Decrypted request received: {decrypted_data}")
-            
-            try:
-                request = json.loads(decrypted_data)
-            except json.JSONDecodeError:
-                print("Error: Received invalid JSON format.")
-                client_socket.close()
-                return
-            
-            # print(f"Server received request: {request}")
-            
+            request = json.loads(data)
+            print(f"Server received request: {request}")
+            if request["command"] == "login":
+                username = request["username"]
+                active_clients[username] = client_socket  # ✅ Store active client
+                print(f"[SERVER] {username} is now online.")
             response = process_request(request)
-
-            # 🔒 Encrypt the response before sending
-            encrypted_response = encrypt_message(json.dumps(response))
-            client_socket.send(encrypted_response.encode())
-
-        except Exception as e:
-            print(f"Error handling client request: {e}")
-            break  # Ensure socket is closed properly
+            print(f"Server sending response: {response}")
+            client_socket.send(json.dumps(response).encode())
+        except:
+            break
     client_socket.close()
-
 
 def process_request(request):
     command = request.get("command")
-    username = request.get("username")
-    signature = request.get("signature")
-
-    print(f"Command received: {command} by user {username}.\n")
-
-    # ✅ Handle registration requests first (NO signature needed)
     if command == "register":
         username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
-
+        
         if not username or not password_hash or not salt or not public_key:
             return {"status": "error", "message": "Username, password, and public key cannot be empty"}
 
@@ -196,8 +117,6 @@ def process_request(request):
 
         return {"status": "error", "message": "User not found"}
 
-    
-    # ✅ Handle login requests separately (NO signature verification needed)
     elif command == "login":
         username, password_hash = request["username"], request["password_hash"]
         
@@ -209,236 +128,231 @@ def process_request(request):
             return {
                 "status": "success",
                 "message": "Login successful",
-                "public_key": user[1]  # ✅ Return public key for later authentication
+                "public_key": user[1]  # Include the public key in the response
             }
         
         return {"status": "error", "message": "Invalid credentials"}
 
-    # ✅ Ensure non-login requests have a valid signature
-    if command not in ["login", "register"]:
-        # print(f"signature: {signature}")
-        if not signature:
-            return {"status": "error", "message": "Missing authentication signature"}
-        
-        username = request["username"]
 
-        # ✅ Retrieve the user's public key
+    elif command == "get_public_key":
+        username = request["user"]
+        
         cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
         user = cursor.fetchone()
 
-        if not user:
+        if user and user[0]:
+            return {"status": "success", "public_key": user[0]}
+        
+        return {"status": "error", "message": "User not found or no public key stored"}
+    
+    elif command == "check_message_history":
+        user_id = get_user_id(request["user"])
+        friend_id = get_user_id(request["friend"])
+
+        if not user_id or not friend_id:
+            return {"status": "error", "message": "User or friend not found"}
+
+        # Check if the user has sent a message to the friend
+        cursor.execute(
+            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
+            (user_id, friend_id)
+        )
+        message_sent = cursor.fetchone()
+
+        if message_sent:
+            return {"status": "success", "message": "Message history found"}
+        else:
+            return {"status": "error", "message": "No message history found"}
+
+
+    elif command == "add_friend":
+        user_id = get_user_id(request["user"])
+        friend_id = get_user_id(request["friend"])
+
+        if not user_id or not friend_id:
             return {"status": "error", "message": "User not found"}
 
-        public_key_pem = user[0]
+        # ✅ Check if a friendship record already exists
+        cursor.execute(
+            "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+            (user_id, friend_id, friend_id, user_id)
+        )
+        existing_friendship = cursor.fetchone()
+        if existing_friendship:
+            friendship_status = existing_friendship[0]
 
-        # ✅ Verify the signature
-        try:
-            request_copy = request.copy()
-            del request_copy["signature"]  # Remove signature before verification
-            request_json = json.dumps(request_copy)
-
-            if not verify_signature(public_key_pem, request_json, signature):
-                return {"status": "error", "message": "Invalid digital signature"}
-        except Exception as e:
-            print(f"Signature verification error: {e}")
-            return {"status": "error", "message": "Signature verification failed"}
-    
-        if command == "check_message_history":
-            user_id = get_user_id(request["username"])
-            friend_id = get_user_id(request["friend"])
-
-            if not user_id or not friend_id:
-                return {"status": "error", "message": "User or friend not found"}
-
-            # Check if the user has sent a message to the friend
-            cursor.execute(
-                "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
-                (user_id, friend_id)
-            )
-            message_sent = cursor.fetchone()
-
-            if message_sent:
-                return {"status": "success", "message": "Message history found"}
-            else:
-                return {"status": "error", "message": "No message history found"}
-
-        
-        elif command == "add_friend":
-            user_id = get_user_id(request["username"])
-            friend_id = get_user_id(request["friend"])
-
-            if not user_id or not friend_id:
-                return {"status": "error", "message": "User not found"}
-
-            # ✅ Check if a friendship record already exists
-            cursor.execute(
-                "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                (user_id, friend_id, friend_id, user_id)
-            )
-            existing_friendship = cursor.fetchone()
-            if existing_friendship:
-                friendship_status = existing_friendship[0]
-
-                # ✅ If both users already sent a request, change status to "accepted"
-                if friendship_status == "pending":
-                    cursor.execute(
-                        "UPDATE friendships SET status='accepted' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (user_id, friend_id, friend_id, user_id)
-                    )
-                    conn.commit()
-
-                    # ✅ Fetch and exchange public keys
-                    cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
-                    user_public_key = cursor.fetchone()[0]
-                    cursor.execute("SELECT public_key FROM users WHERE id=?", (friend_id,))
-                    friend_public_key = cursor.fetchone()[0]
-
-                    cursor.execute(
-                        "UPDATE friendships SET public_key1=?, public_key2=? WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (user_public_key, friend_public_key, user_id, friend_id, friend_id, user_id)
-                    )
-                    conn.commit()
-
-                    return {"status": "success", "message": f"Friendship accepted! Public keys exchanged."}
-
-                
-                return {"status": "error", "message": "Friend request already sent or already friends."}
-
-            # ✅ If no prior friendship exists, insert a new pending request
-            cursor.execute(
-            "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
-            (user_id, friend_id)
-            )
-            conn.commit()
-
-            return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
-
-        elif command == "check_proximity":
-           # user_id = get_user_id(request["user"])
-           # if not user_id:
-           #     return {"status": "error", "message": "User not found"}
-           # cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (user_id,))
-           # user_location = cursor.fetchone()
-           # if not user_location:
-           #     return {"status": "error", "message": "Location not set"}
-
-           # x1, y1 = user_location
-           # user_cell = (x1 // 1000, y1 // 1000)
-           # cursor.execute("SELECT users.username FROM locations JOIN users ON locations.user_id = users.id WHERE FLOOR(CAST(x AS INTEGER) / 1000) = ? AND FLOOR(CAST(y AS INTEGER) / 1000) = ?", (user_cell[0], user_cell[1]))
-           # nearby_users = [row[0] for row in cursor.fetchall() if row[0] != request["user"]]
-
-           # return {"status": "success", "nearby_users": nearby_users}
-            username = request["username"]
-            file_path = f"{username}_location.json"
-
-            # Check if the location file exists
-            if not os.path.exists(file_path):
-                return {"status": "error", "message": "Location not set"}
-
-            try:
-                # Load the coordinates from the JSON file
-                with open(file_path, "r") as json_file:
-                    location_data = json.load(json_file)
-                    x = location_data.get("x_location")
-                    y = location_data.get("y_location")
-
-                if x is None or y is None:
-                    return {"status": "error", "message": "Invalid location data"}
-
-                return {
-                    "status": "success",
-                    "message": f"For now i will just display your updated location: X={x}, Y={y}",
-                    "x": x,
-                    "y": y,
-                    "nearby_users": []  # Empty list for now
-                }
-    
-            except Exception as e:
-                return {"status": "error", "message": f"Error reading location data: {str(e)}"}
-            
-        elif command == "send_message":
-            sender_id = get_user_id(request["sender"])
-            recipient_id = get_user_id(request["recipient"])
-            message = request["message"]
-            if not sender_id or not recipient_id:
-                return {"status": "error", "message": "User not found"}
-
-            # Get sender's location grid
-            cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (sender_id,))
-            sender_location = cursor.fetchone()
-            # Get recipient's location grid
-            cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (recipient_id,))
-            recipient_location = cursor.fetchone()
-            if not sender_location or not recipient_location:
-                return {"status": "error", "message": "Location not set"}
-
-            sender_grid = (sender_location[0] // 1000, sender_location[1] // 1000)
-            recipient_grid = (recipient_location[0] // 1000, recipient_location[1] // 1000)
-            # Check if sender and recipient are friends
-            cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (sender_id, recipient_id, recipient_id, sender_id))
-            are_friends = cursor.fetchone()
-            # Check if sender's grid has been visited by recipient in the past
-            cursor.execute("SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND (sender_grid_x=? AND sender_grid_y=?)",
-                        (sender_id, recipient_id, sender_grid[0], sender_grid[1]))
-            
-            # Condition checks
-            if (sender_grid == recipient_grid) or are_friends:
-                # Store message in the database
-                cursor.execute("INSERT INTO messages (sender_id, recipient_id, message) VALUES (?, ?, ?)", 
-                            (sender_id, recipient_id, message))
+            # ✅ If both users already sent a request, change status to "accepted"
+            if friendship_status == "pending":
+                cursor.execute(
+                    "UPDATE friendships SET status='accepted' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                    (user_id, friend_id, friend_id, user_id)
+                )
                 conn.commit()
 
-                return {"status": "success", "message": "Message sent"}
+                # ✅ Fetch and exchange public keys
+                cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
+                user_public_key = cursor.fetchone()[0]
+                cursor.execute("SELECT public_key FROM users WHERE id=?", (friend_id,))
+                friend_public_key = cursor.fetchone()[0]
 
-            else:
-                return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
+                cursor.execute(
+                    "UPDATE friendships SET public_key1=?, public_key2=? WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                    (user_public_key, friend_public_key, user_id, friend_id, friend_id, user_id)
+                )
+                conn.commit()
+
+                return {"status": "success", "message": f"Friendship accepted! Public keys exchanged."}
+
         
-        elif command == "view_inbox":
-            user_id = get_user_id(request["username"])
-            if user_id:
-                cursor.execute("SELECT users.username, message, timestamp FROM messages JOIN users ON messages.sender_id = users.id WHERE recipient_id=? ORDER BY timestamp DESC", (user_id,))
-                messages = [{"from": row[0], "message": row[1], "timestamp": row[2]} for row in cursor.fetchall()]
-                return {"status": "success", "inbox": messages}
-            return {"status": "error", "message": "User not found"}
+            return {"status": "error", "message": "Friend request already sent or already friends."}
 
-        elif command == "remove_friend":
-            user_id = get_user_id(request["username"])
-            friend_id = get_user_id(request["friend"])
+        # ✅ If no prior friendship exists, insert a new pending request
+        cursor.execute(
+        "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
+        (user_id, friend_id)
+        )
+        conn.commit()
 
-            if not user_id or not friend_id:
+        return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
+        
+    elif command == "update_location":
+        user_id = get_user_id(request["user"])
+        if user_id:
+            x, y = request["x"], request["y"]
+            cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
+                           (user_id, x, y, x, y))
+            conn.commit()
+            return {"status": "success", "message": "Location updated"}
+        return {"status": "error", "message": "User not found"}
+
+    elif command == "check_proximity":
+        try:
+            
+            username = request["username"]
+            user_id = get_user_id(username)
+
+            if not user_id:
                 return {"status": "error", "message": "User not found"}
 
-            # Check if they are actually friends
-            cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (user_id, friend_id, friend_id, user_id))
-            friendship_exists = cursor.fetchone()
+            # Find all friends
+            cursor.execute(
+                """SELECT username FROM users WHERE id IN 
+                (SELECT user_id2 FROM friendships WHERE user_id1=? AND status='accepted' 
+                UNION 
+                SELECT user_id1 FROM friendships WHERE user_id2=? AND status='accepted')""",
+                (user_id, user_id),
+            )
+            friends = [row[0] for row in cursor.fetchall()]
+            if not friends:
+                return {"status": "error", "message": "No friends found"}
 
-            if not friendship_exists:
-                return {"status": "error", "message": "You are not friends with this user"}
+            # Forward encrypted values to friends
+            for friend in friends:
+                if friend in active_clients:
+                    friend_socket = active_clients[friend]
+                    request["user2"] = friend
+                    friend_socket.send(json.dumps(request).encode())
+                else:
+                    response = {"status": "error", "message": "No friends online"}
+                    socket = active_clients[username]
+                    socket.send(json.dumps(response).encode())
+                    return response
+            return {"status": "success", "message": f"Sent encrypted to {friend}"}
 
-            # Remove friendship from database
-            cursor.execute("DELETE FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                        (user_id, friend_id, friend_id, user_id))
+        except Exception as error:
+            print(error)
+    
+    elif command == "send_encrypted_distance":
+        friend_socket = active_clients[request["user1"]]
+        friend_socket.send(json.dumps(request).encode())
+        return {"status": "success", "message": "Encrypted euclidean sent"}
+    elif command == "send_message":
+        sender_id = get_user_id(request["sender"])
+        recipient_id = get_user_id(request["recipient"])
+        message = request["message"]
+        if not sender_id or not recipient_id:
+            return {"status": "error", "message": "User not found"}
+
+        # Get sender's location grid
+        cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (sender_id,))
+        sender_location = cursor.fetchone()
+        # Get recipient's location grid
+        cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (recipient_id,))
+        recipient_location = cursor.fetchone()
+        if not sender_location or not recipient_location:
+            return {"status": "error", "message": "Location not set"}
+
+        sender_grid = (sender_location[0] // 1000, sender_location[1] // 1000)
+        recipient_grid = (recipient_location[0] // 1000, recipient_location[1] // 1000)
+        # Check if sender and recipient are friends
+        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                       (sender_id, recipient_id, recipient_id, sender_id))
+        are_friends = cursor.fetchone()
+        # Check if sender's grid has been visited by recipient in the past
+        cursor.execute("SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND (sender_grid_x=? AND sender_grid_y=?)",
+                       (sender_id, recipient_id, sender_grid[0], sender_grid[1]))
+        
+        # Condition checks
+        if (sender_grid == recipient_grid) or are_friends:
+            # Store message in the database
+            cursor.execute("INSERT INTO messages (sender_id, recipient_id, message) VALUES (?, ?, ?)", 
+                           (sender_id, recipient_id, message))
             conn.commit()
 
-            return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
+            return {"status": "success", "message": "Message sent"}
 
-            # In process_request function on the server
-        elif command == "clear_messages":
-            user_id = get_user_id(request["username"]) 
-            if user_id:
-                try:
-                    cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
-                    conn.commit()
-                    return {"status": "success", "message": "All messages deleted"}
-                except Exception as e:
-                    return {"status": "error", "message": f"Error deleting messages: {str(e)}"}
-            return {"status": "error", "message": "No messages to delete for the current user!"}
+        else:
+            return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
+    
+    elif command == "view_inbox":
+        user_id = get_user_id(request["user"])
+        if user_id:
+            cursor.execute("SELECT users.username, message, timestamp FROM messages JOIN users ON messages.sender_id = users.id WHERE recipient_id=? ORDER BY timestamp DESC", (user_id,))
+            messages = [{"from": row[0], "message": row[1], "timestamp": row[2]} for row in cursor.fetchall()]
+            return {"status": "success", "inbox": messages}
+        return {"status": "error", "message": "User not found"}
 
+    elif command == "remove_friend":
+        user_id = get_user_id(request["user"])
+        friend_id = get_user_id(request["friend"])
 
+        if not user_id or not friend_id:
+            return {"status": "error", "message": "User not found"}
 
-    return {"status": "error", "message": "Unknown command"}
+        # Check if they are actually friends
+        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                    (user_id, friend_id, friend_id, user_id))
+        friendship_exists = cursor.fetchone()
+
+        if not friendship_exists:
+            return {"status": "error", "message": "You are not friends with this user"}
+
+        # Remove friendship from database
+        cursor.execute("DELETE FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                    (user_id, friend_id, friend_id, user_id))
+        conn.commit()
+
+        return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
+
+        # In process_request function on the server
+    elif command == "clear_messages":
+        username = request["username"]
+        user_id = get_user_id(username)
+
+        if user_id:
+            try:
+                cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
+                conn.commit()
+                return {"status": "success", "message": "All messages deleted"}
+            except Exception as e:
+                return {"status": "error", "message": f"Error deleting messages: {str(e)}"}
+        return {"status": "error", "message": "No messages to delete for the current user!"}
+
+    elif command == "logout":
+        username = request["username"]
+        del active_clients[username]
+
+    return {"status": "error", "message": f"Unknown command {command}"}
     
 def signal_handler(sig, frame):
     """Handles Ctrl+C signal to shut down the server cleanly."""
