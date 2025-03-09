@@ -260,8 +260,10 @@ def process_request(request):
             )
             friends = [row[0] for row in cursor.fetchall()]
             if not friends:
-                return {"status": "error", "message": "No friends found"}
-
+                response = {"status": "error", "message": "No friends found"}
+                socket = active_clients[username]
+                socket.send(json.dumps(response).encode())
+                return response
             # Forward encrypted values to friends
             for friend in friends:
                 if friend in active_clients:

@@ -127,8 +127,9 @@ def receive_messages(client_socket):
                     user_public_key = serialization.load_pem_public_key(username_public_key.encode())
                     try:
                         user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+                        print("\nSignature verification success.\nPress enter to continue.")
                     except InvalidSignature :
-                        print("Signature verification failed, message ignored.")
+                        print("\nSignature verification failed, message ignored.")
                         continue
                 status = response.get("status")
                 if status == "error":
