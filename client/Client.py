@@ -410,11 +410,12 @@ def main():
                                 input("Press Enter to enter to the user control page...")
                             else:
                                 print("Private key is incorrect!")
-                                input("Press Enter to return to the login page...")
+                                input("Press Enter to return to the Welcome page...")
                                 logged_in = False
                         else:
                             private_key_pem = None
-                            print("Warning: No private key selected. Decryption may fail.")
+                            print("Warning: No private key selected. Decryption failed.")
+                            input("Press Enter to return to the Welcome page...")
                     else:
                         print("Error: Public key not found in server response.")
                 
