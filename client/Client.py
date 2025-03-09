@@ -127,9 +127,8 @@ def receive_messages(client_socket):
                     user_public_key = serialization.load_pem_public_key(username_public_key.encode())
                     try:
                         user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
-                        print("\nSignature verification success.\nPress enter to continue.")
                     except InvalidSignature :
-                        print("\nSignature verification failed, message ignored.")
+                        print("Signature verification failed, message ignored.")
                         continue
                 status = response.get("status")
                 if status == "error":
@@ -304,7 +303,6 @@ def update_location(uname):
 def main():
     logged_in = False
     username = None
-    private_key = None  # Store private key after login
     
     while True:
         if not logged_in:
@@ -316,50 +314,63 @@ def main():
             choice = input("Select an option: ").strip()
             
             if choice == "1":  # Register
-                uname = input("Enter username: ").strip()
-                pwd = getpass.getpass("Enter password: ").strip()
-                if not uname or not pwd:
-                    print("Error: Username and password cannot be empty.")
-                    input("Press Enter to continue...")
-                    continue
-                salt = generate_salt()
-                hashed_pwd = hash_password(pwd, salt)
-                # In main() method, inside the registration section
-                private_key_pem, public_key_pem = generate_rsa_keys()
+                    uname = input("Enter username: ").strip()
+                    pwd = getpass.getpass("Enter password: ").strip()
+                    if not uname or not pwd:
+                        print("Error: Username and password cannot be empty.")
+                        input("Press Enter to continue...")
+                        continue
 
-                # Prompt user with a print statement about saving the private key
-                print(f"\nPlease save your private key securely. This key is unique to your account.")
-                print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
+                    # First, check if user already exists using get_salt
+                    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    client.connect(("127.0.0.1", 5555))
+                    check_response = send_request(client, {"command": "get_salt", "username": uname})
+                    client.close()
 
-                # Save private key to a file specific to the user
-                private_key_filename = f"{uname}_private.pem"
-                private_key_path = prompt_for_save_private_key(private_key_filename)
+                    if check_response["status"] == "success":
+                        # Means user already exists
+                        print("Error: User already exists. Please login instead.")
+                        input("Press Enter to continue...")
+                        continue
 
-                if private_key_path:
+                    # If user does not exist, proceed
+                    salt = generate_salt()
+                    hashed_pwd = hash_password(pwd, salt)
+
+                    # Generate RSA key pair
+                    private_key_pem, public_key_pem = generate_rsa_keys()
+
+                    print(f"\nPlease save your private key securely. This key is unique to your account.")
+                    print(f"The private key for {uname} will be saved with the filename: {uname}_private.pem")
+                    private_key_filename = f"{uname}_private.pem"
+                    
+                    # Prompt user to choose a file path for saving private key
+                    private_key_path = prompt_for_save_private_key(private_key_filename)
+                    if not private_key_path:
+                        # If user did not pick a file, abort registration to avoid saving public key
+                        print("Warning: Private key not saved. Registration aborted.")
+                        input("Press Enter to continue...")
+                        continue
+
+                    # If user *did* pick a path, write the private key and proceed with registration
                     with open(private_key_path, "w") as key_file:
                         key_file.write(private_key_pem)
                     print(f"Private key saved to: {private_key_path}")
-                else:
-                    print("Warning: Private key not saved. You may want to recreate user!")
-                    input("Press Enter to continue...")  # Wait for user input
 
-                # Register user with public key
-                client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client.connect(("127.0.0.1", 5555))
-                response = send_request(client,{
-                    "command": "register",
-                    "username": uname,
-                    "password_hash": hashed_pwd,
-                    "salt": salt,
-                    "public_key": public_key_pem
-                })
-                print(response["message"])
-                client.close()
-                if response["status"] == "success":
-                    
-                    input("Press Enter to continue...")  # Wait for user input
-                    
-                    continue  # Return to the main menu after registration
+                    # Register user with public key only after confirming the private key was saved
+                    client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                    client.connect(("127.0.0.1", 5555))
+                    response = send_request(client, {
+                        "command": "register",
+                        "username": uname,
+                        "password_hash": hashed_pwd,
+                        "salt": salt,
+                        "public_key": public_key_pem
+                    })
+                    client.close()
+
+                    print(response["message"])
+                    input("Press Enter to continue...")
 
             
             elif choice == "2":  # Login
