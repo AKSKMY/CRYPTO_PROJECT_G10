@@ -166,7 +166,7 @@ def process_request(request):
 
 
     elif command == "add_friend":
-        user_id = get_user_id(request["user"])
+        user_id = get_user_id(request["username"])
         friend_id = get_user_id(request["friend"])
 
         if not user_id or not friend_id:
@@ -216,7 +216,7 @@ def process_request(request):
         return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
         
     elif command == "update_location":
-        user_id = get_user_id(request["user"])
+        user_id = get_user_id(request["username"])
         if user_id:
             x, y = request["x"], request["y"]
             cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
@@ -253,7 +253,7 @@ def process_request(request):
                     request["user2"] = friend
                     friend_socket.send(json.dumps(request).encode())
                 else:
-                    response = {"status": "error", "message": "No friends online"}
+                    response = {"status": "error", "message": f"{friend} is not online"}
                     socket = active_clients[username]
                     socket.send(json.dumps(response).encode())
                     return response
@@ -313,7 +313,7 @@ def process_request(request):
         return {"status": "error", "message": "User not found"}
 
     elif command == "remove_friend":
-        user_id = get_user_id(request["user"])
+        user_id = get_user_id(request["username"])
         friend_id = get_user_id(request["friend"])
 
         if not user_id or not friend_id:
@@ -351,7 +351,7 @@ def process_request(request):
     elif command == "logout":
         username = request["username"]
         del active_clients[username]
-
+        return {"status": "success", "message": f"{username} has logged out."}
     return {"status": "error", "message": f"Unknown command {command}"}
     
 def signal_handler(sig, frame):

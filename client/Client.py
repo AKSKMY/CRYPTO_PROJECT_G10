@@ -71,8 +71,8 @@ def process_proximity_request(request, client_socket):
             "user2": user2,
             "enc_distance": enc_distance.ciphertext()
         }
-    #send_request(client_socket,response)
-    client_socket.send(json.dumps(response).encode())
+    send_request(client_socket,response)
+    #client_socket.send(json.dumps(response).encode())
     
 def handle_encrypted_distance(response):
     """Decrypt and process the encrypted distance received from a friend."""
@@ -114,7 +114,9 @@ def receive_messages(client_socket):
                 
                 status = response.get("status")
                 if status == "error":
-                        print(response["message"])
+                    print(response["message"])
+                elif status == "success":
+                    print(response["message"])
                 command = response.get("command")
 
                 # ✅ Handle different command types
@@ -151,7 +153,7 @@ def send_request(client,request):
         client.send(json.dumps(request).encode())
         response_data = client.recv(4096)
         if not response_data:
-            print("If not send in send_requsest")
+            print("If not send in send_request")
             raise ValueError("No response from server")
 
         response = json.loads(response_data.decode())
@@ -421,7 +423,7 @@ def main():
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request(client,{"command": "add_friend", "user": username, "friend": friend_name})
+                response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name})
 
                 #print("DEBUG: Server response:", response)  # Debugging
 
@@ -429,7 +431,7 @@ def main():
                     # If a message history exists, proceed with adding the friend
                     print(response["message"])
                 else:
-                    print("[ERROR] Failed to send a friend request.")
+                    print(response["message"])
                 input("Press Enter to continue...")
 
             elif choice == "4":  # Send Encrypted Message
@@ -514,7 +516,7 @@ def main():
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request(client,{"command": "remove_friend", "user": username, "friend": friend})
+                    response = send_request(client,{"command": "remove_friend", "username": username, "friend": friend})
                     print(response["message"])
 
                 input("Press Enter to continue...")
