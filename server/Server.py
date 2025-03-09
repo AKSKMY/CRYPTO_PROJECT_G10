@@ -116,7 +116,7 @@ def process_request(request):
             cursor.execute("INSERT INTO users (username, password_hash, salt, public_key) VALUES (?, ?, ?, ?)", 
                            (username, password_hash, salt, public_key))
             conn.commit()
-            return {"status": "success", "message": "Registration successful"}
+            return {"status": "success", "message": "Registration successful. Please login now."}
         except sqlite3.IntegrityError:
             return {"status": "error", "message": "User already exists"}
         except Exception as e:
