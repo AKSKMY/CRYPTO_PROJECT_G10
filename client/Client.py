@@ -16,7 +16,9 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 from algorithms.rsa_private_auth import is_private_key_correct
 
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
-
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.exceptions import InvalidSignature
 # Store Paillier key pair
 paillier_public_key = None
 paillier_private_key = None
@@ -111,7 +113,23 @@ def receive_messages(client_socket):
                     break  # ✅ Exit the loop if the server closes the connection
                 
                 response = json.loads(response_data.decode())  # ✅ Decode response
-                
+                signature = response.get("signature")
+
+                if signature:
+                    signable_request = {k: v for k, v in response.items() if k not in ["user2", "signature"]}
+                    request_string = json.dumps(signable_request, separators=(',', ':'))
+                    username = response.get("username")
+                    get_user_public_key = send_request(client_socket,{"command": "get_public_key", "user": username})
+                    username_public_key = get_user_public_key["public_key"]
+                    if not username_public_key:
+                        print("User's public key is not found")
+                        continue
+                    user_public_key = serialization.load_pem_public_key(username_public_key.encode())
+                    try:
+                        user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+                    except InvalidSignature :
+                        print("Signature verification failed, message ignored.")
+                        continue
                 status = response.get("status")
                 if status == "error":
                     print(response["message"])
@@ -128,9 +146,6 @@ def receive_messages(client_socket):
 
                 elif command == "send_encrypted_distance":
                     handle_encrypted_distance(response)
-    
-
-            
 
             except json.JSONDecodeError as e:
                 print(f"[CLIENT ERROR] JSON Decode Error: {e}")
@@ -147,15 +162,37 @@ def receive_messages(client_socket):
         
     
         
-def send_request(client,request):
+def send_request(client,request,private_key_pem=None):
     try:
+        signable_request = {k: v for k, v in request.items() if k not in ["user2", "signature"]}
+        request_string = json.dumps(signable_request, separators=(',', ':'))
+        if private_key_pem:
+            #request["signature"] = serialization.load_pem_private_key(private_key_pem.encode(), password=None).sign(request_string, padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256()).hex()
+            private_key = serialization.load_pem_private_key(
+            private_key_pem.encode(),  # Convert string PEM to key object
+            password=None
+        )
 
+        # ✅ Sign the entire JSON request string
+            signature = private_key.sign(
+                request_string.encode(),  # Convert JSON string to bytes
+                padding.PSS(
+                    mgf=padding.MGF1(hashes.SHA256()),
+                    salt_length=padding.PSS.MAX_LENGTH
+                ),
+                hashes.SHA256()
+            )
+
+            # ✅ Convert signature to HEX (JSON-safe format)
+            request["signature"] = signature.hex()
+        else:
+            request["signature"] = None
         client.send(json.dumps(request).encode())
         response_data = client.recv(4096)
+
         if not response_data:
             print("If not send in send_request")
             raise ValueError("No response from server")
-
         response = json.loads(response_data.decode())
         return response
     except json.JSONDecodeError:
@@ -191,12 +228,12 @@ def prompt_for_private_key():
 def clear_screen():
     os.system("cls" if os.name == "nt" else "clear")  # Cross-platform screen clearing
 
-def check_proximity(username, client_socket):
+def check_proximity(username, client_socket, private_key_pem):
     """Encrypts and sends location to check proximity with friends."""
     global paillier_public_key, paillier_private_key
 
     # Generate a new Paillier key pair for this session
-    paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=256)
+    paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=128)
 
     # Load user's saved location
     save_path = f"proximity_json/{username}_location.json"
@@ -222,11 +259,10 @@ def check_proximity(username, client_socket):
         "enc_y1": str(enc_y1.ciphertext()),
         "enc_x1_sq": str(enc_x1_sq.ciphertext()),
         "enc_y1_sq": str(enc_y1_sq.ciphertext()),
-        "user2": ''
+        "user2": '',
+        "signature": None
     }
-    
-    send_request(client_socket, request)
-
+    send_request(client_socket, request, private_key_pem)
 def update_location(uname):
     x = input("Enter X coordinate (0-99999): ").strip()
     y = input("Enter Y coordinate (0-99999): ").strip()
@@ -412,7 +448,7 @@ def main():
                 update_location(username)
 
             elif choice == "2":  # Display Proximity
-                check_proximity(username, client)
+                check_proximity(username, client, private_key_pem)
                 time.sleep(0.1)
                 input("Press enter to continue...\n")
             elif choice == "3":  # Add Friend
@@ -423,7 +459,7 @@ def main():
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name})
+                response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name},private_key_pem)
 
                 #print("DEBUG: Server response:", response)  # Debugging
 
@@ -516,7 +552,7 @@ def main():
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
                 else:
-                    response = send_request(client,{"command": "remove_friend", "username": username, "friend": friend})
+                    response = send_request(client,{"command": "remove_friend", "username": username, "friend": friend}, private_key_pem)
                     print(response["message"])
 
                 input("Press Enter to continue...")
@@ -528,6 +564,7 @@ def main():
                     response = send_request(client,{"command": "logout", "username": username})
                     logged_in = False
                     username = None
+                    client.close()
                     print("Logged out successfully.")
                     input("Press Enter to continue...")
                 else:

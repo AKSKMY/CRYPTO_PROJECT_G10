@@ -6,7 +6,9 @@ import bcrypt
 import sys
 import signal
 import select
-
+from cryptography.hazmat.primitives.asymmetric import rsa, padding
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.exceptions import InvalidSignature
 def is_socket_valid(sock):
     readable, writable, _ = select.select([sock], [sock], [], 0)
     return bool(readable or writable)
@@ -74,7 +76,6 @@ def handle_client(client_socket):
             if not data:
                 #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
-            
             request = json.loads(data)
             print(f"Server received request: {request}")
             if request["command"] == "login":
@@ -90,6 +91,21 @@ def handle_client(client_socket):
 
 def process_request(request):
     command = request.get("command")
+    signature = request.get("signature")
+    if signature:
+        signable_request = {k: v for k, v in request.items() if k not in ["user2", "signature"]}
+        request_string = json.dumps(signable_request, separators=(',', ':'))
+        username = request.get("username")
+        cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
+        user_data = cursor.fetchone()
+        if not user_data:
+            return {"status": "error", "message": "User not found"}
+        user_public_key = serialization.load_pem_public_key(user_data[0].encode())
+        try:
+            user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+            print("Verification successful")
+        except InvalidSignature :
+            return {"status": "error", "message": "Signature verification failed"}
     if command == "register":
         username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
         
@@ -251,7 +267,9 @@ def process_request(request):
                 if friend in active_clients:
                     friend_socket = active_clients[friend]
                     request["user2"] = friend
+                    print(f"request is {request}")
                     friend_socket.send(json.dumps(request).encode())
+                    
                 else:
                     response = {"status": "error", "message": f"{friend} is not online"}
                     socket = active_clients[username]
