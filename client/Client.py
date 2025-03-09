@@ -200,9 +200,12 @@ def send_request(client,request,private_key_pem=None):
     except Exception as e:
         return {"status": "error", "message": f"Client error: {str(e)}"}
 
-def prompt_for_save_location(default_filename):
+def prompt_for_save_private_key(default_filename):
     root = tk.Tk()
     root.withdraw()  # Hide the root window
+    root.attributes('-topmost', True)  # Ensure it appears in front
+    root.update()  # Force update
+    
     file_path = filedialog.asksaveasfilename(
         defaultextension=".pem",
         initialfile=default_filename,
@@ -329,14 +332,15 @@ def main():
 
                 # Save private key to a file specific to the user
                 private_key_filename = f"{uname}_private.pem"
-                private_key_path = prompt_for_save_location(private_key_filename)
+                private_key_path = prompt_for_save_private_key(private_key_filename)
 
                 if private_key_path:
                     with open(private_key_path, "w") as key_file:
                         key_file.write(private_key_pem)
                     print(f"Private key saved to: {private_key_path}")
                 else:
-                    print("Warning: Private key not saved. Store it securely!")
+                    print("Warning: Private key not saved. You may want to recreate user!")
+                    input("Press Enter to continue...")  # Wait for user input
 
                 # Register user with public key
                 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -351,8 +355,7 @@ def main():
                 print(response["message"])
                 client.close()
                 if response["status"] == "success":
-                    private_key = private_key_pem  # Store in memory for use
-                    print("Registration successful. Please log in now.")
+                    
                     input("Press Enter to continue...")  # Wait for user input
                     
                     continue  # Return to the main menu after registration
@@ -404,7 +407,7 @@ def main():
                             if is_private_key_correct(private_key_pem, public_key_pem, challenge):
                                 print("Private key is correct!")
                                 logged_in = True
-                                input("Press Enter to return to the Welcome page...")
+                                input("Press Enter to enter to the user control page...")
                             else:
                                 print("Private key is incorrect!")
                                 input("Press Enter to return to the login page...")
