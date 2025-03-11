@@ -3,6 +3,7 @@ import os
 import sys
 import sqlite3
 import statistics
+import psutil
 
 # Ensure Python can locate your "algorithms" package
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -117,16 +118,45 @@ def signature_verification_performance(pub_key_pem, message, signature_hex, tria
     times = [measure_execution_time(verify_signature, pub_key_pem, message, signature_hex)[1] for _ in range(trials)]
     return statistics.mean(times), statistics.stdev(times)
 
+
+
+
+# ---------------------------------------------------------------
+# CPU Usage
+# ---------------------------------------------------------------
+
+def monitor_cpu_usage(duration=1):
+    """Monitor CPU usage over a specified duration and return stats."""
+    cpu_usages = []
+
+    for _ in range(duration):
+        cpu_usages.append(psutil.cpu_percent(interval=0.1))  # Sample every 100ms
+
+    return {
+        "avg_cpu": statistics.mean(cpu_usages),
+        "peak_cpu": max(cpu_usages)
+    }
+
+def monitor_cpu_usage_for_function(func, *args, **kwargs):
+    """Measure CPU usage while running a specific function."""
+    cpu_usages = []
+    start_time = time.time()
+    
+    while time.time() - start_time < 1:  # Monitor for 1 second
+        cpu_usages.append(psutil.cpu_percent(interval=0.1))  # Sample every 100ms
+
+    result = func(*args, **kwargs)  # Execute function
+    return result, {
+        "avg_cpu": statistics.mean(cpu_usages),
+        "peak_cpu": max(cpu_usages)
+    }
 # ---------------------------------------------------------------
 # Main Benchmark Suite
 # ---------------------------------------------------------------
 def run_performance_tests():
     print("\n=== Performance Evaluation: CPU Overhead of Proximity Protocol ===\n")
     
-    # Default: 10 trials
-    T = 10
-
-    # Test data
+    T = 10  # Number of trials
     test_value = 12345
     test_message = "Hello, crypto project!"
     sample_signature = "abcd1234"  # Replace with real signature
@@ -134,29 +164,42 @@ def run_performance_tests():
 
     print("[INFO] Running benchmarks...")
 
-    # -- 1) Paillier Encryption --
+    # --- Paillier Encryption ---
     print("[INFO] Benchmarking Paillier encryption...")
+    encrypted_val, paillier_enc_cpu = monitor_cpu_usage_for_function(paillier.encrypt, test_value)
     paillier_enc_mean, paillier_enc_std = paillier_encryption_performance(test_value, trials=T)
-    encrypted_val = paillier.encrypt(test_value)
 
-    # -- 2) Paillier Decryption --
+    # --- Paillier Decryption ---
     print("[INFO] Benchmarking Paillier decryption...")
+    _, paillier_dec_cpu = monitor_cpu_usage_for_function(paillier.decrypt, encrypted_val)
     paillier_dec_mean, paillier_dec_std = paillier_decryption_performance(encrypted_val, trials=T)
 
-    # -- 3) ElGamal Encryption --
+    # --- ElGamal Encryption ---
     print("[INFO] Benchmarking ElGamal encryption...")
+    encrypted_elg_val, elgamal_enc_cpu = monitor_cpu_usage_for_function(elgamal_encrypt, elgamal_public, test_value)
     elg_enc_mean, elg_enc_std = elgamal_encryption_performance(elgamal_public, test_value, trials=T)
-    encrypted_elg_val = elgamal_encrypt(elgamal_public, test_value)
 
-    # -- 4) ElGamal Decryption --
+    # --- ElGamal Decryption ---
     print("[INFO] Benchmarking ElGamal decryption...")
+    _, elgamal_dec_cpu = monitor_cpu_usage_for_function(elgamal_decrypt, elgamal_public, elgamal_private, encrypted_elg_val)
     elg_dec_mean, elg_dec_std = elgamal_decryption_performance(elgamal_public, elgamal_private, encrypted_elg_val, trials=T)
 
     # -- 5) Signature Verification --
     print("[INFO] Benchmarking RSA signature verification...")
     sig_mean, sig_std = signature_verification_performance(fake_public_key_pem, test_message, sample_signature, trials=T)
 
-    # Print results
+    # --- Display Results ---
+    print("\n🔍 CPU Usage Statistics by Algorithm:")
+    print("=" * 60)
+    print(f"{'Operation':<25}{'Peak CPU (%)':>15}{'Avg CPU (%)':>15}")
+    print("=" * 60)
+    print(f"{'Paillier Encrypt':<25}{paillier_enc_cpu['peak_cpu']:>15.2f}{paillier_enc_cpu['avg_cpu']:>15.2f}")
+    print(f"{'Paillier Decrypt':<25}{paillier_dec_cpu['peak_cpu']:>15.2f}{paillier_dec_cpu['avg_cpu']:>15.2f}")
+    print(f"{'ElGamal Encrypt':<25}{elgamal_enc_cpu['peak_cpu']:>15.2f}{elgamal_enc_cpu['avg_cpu']:>15.2f}")
+    print(f"{'ElGamal Decrypt':<25}{elgamal_dec_cpu['peak_cpu']:>15.2f}{elgamal_dec_cpu['avg_cpu']:>15.2f}")
+    print("=" * 60)
+
+     # Print results
     print("\n📊 Benchmark Results ({} trials per test)".format(T))
     print("=" * 75)
     print(f"{'Operation':<30}{'Avg (ms)':>15}{'Std Dev (ms)':>15}")
