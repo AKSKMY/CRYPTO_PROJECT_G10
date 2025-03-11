@@ -1,128 +1,172 @@
 import time
-import json
 import os
+import sys
 import sqlite3
-from algorithms.paillier_proximity import paillier
-from algorithms.encryption_utils import encrypt_message, decrypt_message
-from algorithms.rsa_private_auth import verify_signature
+import statistics
+
+# Ensure Python can locate your "algorithms" package
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+# -- Phe Imports (Paillier) --
+from phe import paillier, generate_paillier_keypair
+
+# -- Encryption Utils --
+from algorithms.encryption_utils import encrypt_message
+
+# -- ElGamal Imports --
+from algorithms.elgamal import elgamal_generate_keys, elgamal_encrypt, elgamal_decrypt
+
+# -- Cryptography (for RSA signature verification) --
+from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.serialization import load_pem_public_key
 
 DB_PATH = "proximity.db"
 
+# ---------------------------------------------------------------
+# Generate a Paillier key pair
+# ---------------------------------------------------------------
+print("[INFO] Generating Paillier key pair (this may take time)...")
+public_key, private_key = generate_paillier_keypair(n_length=512)
+print("[SUCCESS] Paillier key pair generated!")
+
+
+def my_encrypt(x):
+    """Encrypt x using the generated Paillier public_key."""
+    return public_key.encrypt(x)
+
+def my_decrypt(encrypted_obj):
+    """Decrypt encrypted_obj using the generated Paillier private_key."""
+    return private_key.decrypt(encrypted_obj)
+
+# Override the functions in the phe.paillier module
+paillier.encrypt = my_encrypt
+paillier.decrypt = my_decrypt
+
+# ---------------------------------------------------------------
+# Generate ElGamal keys
+# ---------------------------------------------------------------
+print("[INFO] Generating ElGamal key pair...")
+try:
+    elgamal_keys = elgamal_generate_keys(key_size=32)  # Reduce key size if too slow
+    elgamal_public = elgamal_keys['public']
+    elgamal_private = elgamal_keys['private']
+    print("[SUCCESS] ElGamal keys generated.")
+except Exception as e:
+    print(f"[ERROR] Failed to generate ElGamal keys: {e}")
+    sys.exit(1)
+
+# ---------------------------------------------------------------
+# Helper: measure_execution_time
+# ---------------------------------------------------------------
 def measure_execution_time(func, *args, **kwargs):
-    """Helper function to measure execution time of any function."""
+    """Measure execution time of a function (in ms)."""
     start_time = time.time()
     result = func(*args, **kwargs)
     end_time = time.time()
-    execution_time = (end_time - start_time) * 1000  # Convert to milliseconds
-    return result, execution_time
+    return result, (end_time - start_time) * 1000
 
-def update_location_performance(user_id, x, y):
-    """Measure the time taken to encrypt and store user location."""
-    encrypted_x, encrypt_time_x = measure_execution_time(paillier.encrypt, x)
-    encrypted_y, encrypt_time_y = measure_execution_time(paillier.encrypt, y)
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute(
-        "INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?",
-        (user_id, encrypted_x, encrypted_y, encrypted_x, encrypted_y)
-    )
-    conn.commit()
-    conn.close()
-
-    total_time = encrypt_time_x + encrypt_time_y
-    return total_time
-
-def check_proximity_performance(user_id):
-    """Measure the time taken to check proximity."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (user_id,))
-    user_location = cursor.fetchone()
-
-    if not user_location:
-        return None, "User location not found"
-
-    encrypted_x, encrypted_y = user_location
-    start_time = time.time()
-
-    # Find nearby users
-    cursor.execute("SELECT user_id, x, y FROM locations WHERE user_id != ?", (user_id,))
-    for other_user_id, enc_x, enc_y in cursor.fetchall():
-        decrypted_x = paillier.decrypt(enc_x)
-        decrypted_y = paillier.decrypt(enc_y)
-
-        distance_squared = (decrypted_x - paillier.decrypt(encrypted_x))**2 + \
-                           (decrypted_y - paillier.decrypt(encrypted_y))**2
-
-        if distance_squared < 1000000:  # 1000x1000 proximity grid
-            pass  # Simulating the check
-
-    end_time = time.time()
-    conn.close()
-    return (end_time - start_time) * 1000  # Convert to milliseconds
-
-def send_message_performance(sender_id, recipient_id, message):
-    """Measure the time taken to verify proximity and send an encrypted message."""
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (sender_id,))
-    sender_location = cursor.fetchone()
-    cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (recipient_id,))
-    recipient_location = cursor.fetchone()
-
-    if not sender_location or not recipient_location:
-        return None, "Location not set"
-
-    sender_grid = (paillier.decrypt(sender_location[0]) // 1000, paillier.decrypt(sender_location[1]) // 1000)
-    recipient_grid = (paillier.decrypt(recipient_location[0]) // 1000, paillier.decrypt(recipient_location[1]) // 1000)
-
-    start_time = time.time()
-    if sender_grid == recipient_grid:
-        encrypted_message = encrypt_message(message)  # Simulating encryption process
-        cursor.execute(
-            "INSERT INTO messages (sender_id, recipient_id, message) VALUES (?, ?, ?)",
-            (sender_id, recipient_id, encrypted_message)
+# ---------------------------------------------------------------
+# RSA Signature Verification
+# ---------------------------------------------------------------
+def verify_signature(public_key_pem, message, signature_hex):
+    """Verify a digital signature using RSA (PSS)."""
+    try:
+        public_key = load_pem_public_key(public_key_pem.encode())
+        public_key.verify(
+            bytes.fromhex(signature_hex),
+            message.encode(),
+            padding.PSS(
+                mgf=padding.MGF1(hashes.SHA256()),
+                salt_length=padding.PSS.MAX_LENGTH
+            ),
+            hashes.SHA256()
         )
-        conn.commit()
-    end_time = time.time()
+        return True
+    except Exception:
+        return False
 
-    conn.close()
-    return (end_time - start_time) * 1000  # Convert to milliseconds
+# ---------------------------------------------------------------
+# Benchmark: Paillier Encryption/Decryption
+# ---------------------------------------------------------------
+def paillier_encryption_performance(value, trials=10):
+    times = [measure_execution_time(paillier.encrypt, value)[1] for _ in range(trials)]
+    return statistics.mean(times), statistics.stdev(times)
 
-def signature_verification_performance(public_key, message, signature):
-    """Measure the time taken to verify a digital signature."""
-    _, exec_time = measure_execution_time(verify_signature, public_key, message, signature)
-    return exec_time
+def paillier_decryption_performance(encrypted_val, trials=10):
+    times = [measure_execution_time(paillier.decrypt, encrypted_val)[1] for _ in range(trials)]
+    return statistics.mean(times), statistics.stdev(times)
 
+# ---------------------------------------------------------------
+# Benchmark: ElGamal Encryption/Decryption
+# ---------------------------------------------------------------
+def elgamal_encryption_performance(pub_key, value, trials=10):
+    """Measure ElGamal encryption performance."""
+    times = [measure_execution_time(elgamal_encrypt, pub_key, value)[1] for _ in range(trials)]
+    return statistics.mean(times), statistics.stdev(times)
+
+def elgamal_decryption_performance(pub_key, priv_key, ciphertext, trials=10):
+    """Measure ElGamal decryption performance."""
+    times = [measure_execution_time(elgamal_decrypt, pub_key, priv_key, ciphertext)[1] for _ in range(trials)]
+    return statistics.mean(times), statistics.stdev(times)
+
+# ---------------------------------------------------------------
+# Benchmark: Signature Verification
+# ---------------------------------------------------------------
+def signature_verification_performance(pub_key_pem, message, signature_hex, trials=10):
+    times = [measure_execution_time(verify_signature, pub_key_pem, message, signature_hex)[1] for _ in range(trials)]
+    return statistics.mean(times), statistics.stdev(times)
+
+# ---------------------------------------------------------------
+# Main Benchmark Suite
+# ---------------------------------------------------------------
 def run_performance_tests():
-    """Execute and log all performance tests."""
     print("\n=== Performance Evaluation: CPU Overhead of Proximity Protocol ===\n")
+    
+    # Default: 10 trials
+    T = 10
 
-    # Simulated user ID and coordinates
-    user_id = 1
-    x, y = 12345, 67890
-    recipient_id = 2
-    test_message = "Hello, this is a proximity test message."
+    # Test data
+    test_value = 12345
+    test_message = "Hello, crypto project!"
+    sample_signature = "abcd1234"  # Replace with real signature
+    fake_public_key_pem = "fake_public_key"  # Replace with actual PEM
 
-    # Measure location update time
-    location_time = update_location_performance(user_id, x, y)
-    print(f"🔹 Location Update Time: {location_time:.3f} ms")
+    print("[INFO] Running benchmarks...")
 
-    # Measure proximity check time
-    proximity_time = check_proximity_performance(user_id)
-    print(f"🔹 Proximity Check Time: {proximity_time:.3f} ms")
+    # -- 1) Paillier Encryption --
+    print("[INFO] Benchmarking Paillier encryption...")
+    paillier_enc_mean, paillier_enc_std = paillier_encryption_performance(test_value, trials=T)
+    encrypted_val = paillier.encrypt(test_value)
 
-    # Measure message sending time
-    message_time = send_message_performance(user_id, recipient_id, test_message)
-    print(f"🔹 Message Sending Time (with proximity check): {message_time:.3f} ms")
+    # -- 2) Paillier Decryption --
+    print("[INFO] Benchmarking Paillier decryption...")
+    paillier_dec_mean, paillier_dec_std = paillier_decryption_performance(encrypted_val, trials=T)
 
-    # Measure signature verification time (simulated)
-    sample_signature = "abcd1234"  # Replace with actual signature test
-    public_key = "fake_public_key"  # Replace with actual key
-    signature_time = signature_verification_performance(public_key, test_message, sample_signature)
-    print(f"🔹 Signature Verification Time: {signature_time:.3f} ms")
+    # -- 3) ElGamal Encryption --
+    print("[INFO] Benchmarking ElGamal encryption...")
+    elg_enc_mean, elg_enc_std = elgamal_encryption_performance(elgamal_public, test_value, trials=T)
+    encrypted_elg_val = elgamal_encrypt(elgamal_public, test_value)
+
+    # -- 4) ElGamal Decryption --
+    print("[INFO] Benchmarking ElGamal decryption...")
+    elg_dec_mean, elg_dec_std = elgamal_decryption_performance(elgamal_public, elgamal_private, encrypted_elg_val, trials=T)
+
+    # -- 5) Signature Verification --
+    print("[INFO] Benchmarking RSA signature verification...")
+    sig_mean, sig_std = signature_verification_performance(fake_public_key_pem, test_message, sample_signature, trials=T)
+
+    # Print results
+    print("\n📊 Benchmark Results ({} trials per test)".format(T))
+    print("=" * 75)
+    print(f"{'Operation':<30}{'Avg (ms)':>15}{'Std Dev (ms)':>15}")
+    print("=" * 75)
+    print(f"{'Paillier Encrypt':<30}{paillier_enc_mean:>15.3f}{paillier_enc_std:>15.3f}")
+    print(f"{'Paillier Decrypt':<30}{paillier_dec_mean:>15.3f}{paillier_dec_std:>15.3f}")
+    print(f"{'ElGamal Encrypt':<30}{elg_enc_mean:>15.3f}{elg_enc_std:>15.3f}")
+    print(f"{'ElGamal Decrypt':<30}{elg_dec_mean:>15.3f}{elg_dec_std:>15.3f}")
+    print(f"{'RSA Sig Verify':<30}{sig_mean:>15.3f}{sig_std:>15.3f}")
+    print("=" * 75)
 
 if __name__ == "__main__":
     run_performance_tests()
