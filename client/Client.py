@@ -18,6 +18,7 @@ from algorithms.elgamal import *
 from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.exceptions import InvalidSignature
 # Store Paillier key pair
 paillier_public_key = None
@@ -34,6 +35,29 @@ def generate_salt():
 def hash_password(password, salt):
     """Hash the password using the provided salt."""
     return bcrypt.hashpw(password.encode(), salt.encode()).decode()
+
+def decrypt_aes_key(encrypted_aes_key, private_key):
+    """Decrypt the AES key using user's RSA private key."""
+    return private_key.decrypt(
+        bytes.fromhex(encrypted_aes_key),
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
+
+def decrypt_aes(encrypted_data, aes_key):
+    """Decrypt AES-encrypted data."""
+    encrypted_data = bytes.fromhex(encrypted_data)
+    iv = encrypted_data[:16]  # Extract IV
+    ciphertext = encrypted_data[16:]  # Extract ciphertext
+
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
+    decryptor = cipher.decryptor()
+    decrypted_padded = decryptor.update(ciphertext) + decryptor.finalize()
+
+    return decrypted_padded.decode().strip()  # Remove padding
 
 def process_proximity_request(request, client_socket):
     """Computes the encrypted Euclidean distance for proximity checking and sends it back."""
@@ -151,10 +175,9 @@ def handle_encrypted_distance(response):
     except Exception as e:
         print(f"[CLIENT ERROR] Failed to process encrypted distance: {e}")
         traceback.print_exc()  # ✅ Print detailed error log
-def receive_messages(client_socket):
+def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
     client_socket.settimeout(5)  # ✅ Prevents indefinite blocking
-
     try:
         while True:
             try:
@@ -170,15 +193,23 @@ def receive_messages(client_socket):
                 if signature:
                     signable_request = {k: v for k, v in response.items() if k not in ["user2", "signature"]}
                     request_string = json.dumps(signable_request, separators=(',', ':'))
-                    username = response.get("username")
-                    get_user_public_key = send_request(client_socket,{"command": "get_public_key", "user": username})
-                    username_public_key = get_user_public_key["public_key"]
-                    if not username_public_key:
+                    recipient = response.get("username")
+                    get_encrypted_recipient_public_key = send_request(client_socket,{"command": "get_public_key", "user": username, "recipient": recipient})
+                    encrypted_recipient_public_key = get_encrypted_recipient_public_key["encrypted_public_key"]
+                    if not encrypted_recipient_public_key:
                         print("User's public key is not found")
                         continue
-                    user_public_key = serialization.load_pem_public_key(username_public_key.encode())
+                    # ✅ Decrypt AES key using RSA private key
+                    encrypted_aes_key = get_encrypted_recipient_public_key["encrypted_aes_key"]
+                    private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+                    
+                    aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
+
+                    # ✅ Decrypt recipient's public key using AES
+                    recipient_public_key = decrypt_aes(encrypted_recipient_public_key, aes_key)
+                    recipient_public_key = serialization.load_pem_public_key(recipient_public_key.encode())
                     try:
-                        user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+                        recipient_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
                     except InvalidSignature :
                         print("Signature verification failed, message ignored.")
                         continue
@@ -300,7 +331,7 @@ def check_proximity(username, client_socket, private_key_pem, method):
     x1, y1 = location_data["x_location"], location_data["y_location"]
     if method == "1":
         # Generate a new Paillier key pair for this session
-        paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=64)
+        paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=1024)
 
        # Encrypt values using Paillier
         enc_x1 = paillier_public_key.encrypt(x1)
@@ -520,7 +551,7 @@ def main():
         else:
             clear_screen()
             print(f"=== Logged in as: {username} ===")
-            threading.Thread(target=receive_messages, args=(client,), daemon=True).start()
+            threading.Thread(target=receive_messages, args=(client,username, private_key_pem), daemon=True).start()
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend")
@@ -571,7 +602,7 @@ def main():
                     continue
 
                 # Fetch recipient's public key
-                response = send_request({"command": "get_public_key", "user": recipient})
+                response = send_request({"command": "get_public_key", "user": username, "recipient": recipient})
                 if response["status"] != "success":
                     print("Error: Unable to fetch recipient's public key.")
                     input("Press Enter to continue...")

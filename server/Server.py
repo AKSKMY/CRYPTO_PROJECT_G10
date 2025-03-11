@@ -6,9 +6,13 @@ import bcrypt
 import sys
 import signal
 import select
+import os
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+
+
 def is_socket_valid(sock):
     readable, writable, _ = select.select([sock], [sock], [], 0)
     return bool(readable or writable)
@@ -72,7 +76,7 @@ def get_user_id(username):
 def handle_client(client_socket):
     while True:
         try:
-            data = client_socket.recv(1024).decode().strip()  # Strip spaces and newlines
+            data = client_socket.recv(4096).decode().strip()  # Strip spaces and newlines
             if not data:
                 #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
@@ -88,6 +92,33 @@ def handle_client(client_socket):
         except:
             break
     client_socket.close()
+
+def generate_aes_key():
+    """Generate a random 256-bit AES key."""
+    return os.urandom(32)  # 256-bit key
+
+def encrypt_aes(data, aes_key):
+    """Encrypts data using AES."""
+    iv = os.urandom(16)  # Generate a random IV
+    cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
+    encryptor = cipher.encryptor()
+
+    # Padding (AES requires input to be a multiple of 16 bytes)
+    padded_data = data + (16 - len(data) % 16) * " "
+    ciphertext = encryptor.update(padded_data.encode()) + encryptor.finalize()
+
+    return iv + ciphertext  # Return IV + Encrypted Data
+
+def encrypt_aes_key(aes_key, rsa_public_key):
+    """Encrypt AES key using recipient's RSA public key."""
+    return rsa_public_key.encrypt(
+        aes_key,
+        padding.OAEP(
+            mgf=padding.MGF1(algorithm=hashes.SHA256()),
+            algorithm=hashes.SHA256(),
+            label=None
+        )
+    )
 
 def process_request(request):
     command = request.get("command")
@@ -152,12 +183,22 @@ def process_request(request):
 
     elif command == "get_public_key":
         username = request["user"]
-        
-        cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
-        user = cursor.fetchone()
+        recipient = request["recipient"]
+        cursor.execute("SELECT public_key FROM users WHERE username=?", (recipient,))
+        recipient_public_key_string = cursor.fetchone()
 
-        if user and user[0]:
-            return {"status": "success", "public_key": user[0]}
+        if recipient_public_key_string and recipient_public_key_string[0]:
+            cursor.execute("SELECT public_key FROM users WHERE username=?", (username,))
+            user_public_key_string = cursor.fetchone()
+            user_public_key = serialization.load_pem_public_key(user_public_key_string[0].encode())
+            aes_key = generate_aes_key()
+
+            # ✅ Encrypt the recipient’s public key with AES
+            encrypted_recipient_public_key = encrypt_aes(recipient_public_key_string[0], aes_key)
+
+            # ✅ Encrypt the AES key with the user’s RSA public key
+            encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key)
+            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_public_key": encrypted_recipient_public_key.hex()}
         
         return {"status": "error", "message": "User not found or no public key stored"}
     
