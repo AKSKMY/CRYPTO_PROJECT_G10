@@ -682,9 +682,9 @@ def main():
                     response = send_request(client,{"command": "logout", "username": username})
                     logged_in = False
                     username = None
-                    client.close()
                     print("Logged out successfully.")
                     input("Press Enter to continue...")
+                    client.close()
                 else:
                     print("Error: No user logged in.")
                 

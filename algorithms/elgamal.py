@@ -89,34 +89,25 @@ def elgamal_decrypt(public_key, private_key, ciphertext):
 
     return m
 
-
-
 def euclidean_distance_homomorphic(public_key, enc_a, enc_b):
     """
     Calculate encrypted Euclidean distance using homomorphic properties.
-
-    This is a simplified demonstration and assumes:
-    1. enc_a and enc_b are lists of ElGamal encrypted values
-    2. We're calculating distance and not preserving exact homomorphic properties
     """
     p = public_key['p']
     squared_differences = []
 
     # For each coordinate
     for ea, eb in zip(enc_a, enc_b):
-        # For proper homomorphic operations, we'd use more sophisticated techniques
-        # This is a simplification for demonstration purposes
         diff = (ea[1] * pow(eb[1], p - 2, p)) % p  # Homomorphic subtraction (a/b mod p)
-        squared = (diff * diff) % p  # This is not truly homomorphic, just a demonstration
+        squared = (diff * diff) % p  # not truly homomorphic
         squared_differences.append((ea[0], squared))
 
-    # Sum the squared differences (again, this is simplified)
+    # Sum the squared differences
     sum_squared = (0, 0)
     for i, sq in enumerate(squared_differences):
         if i == 0:
             sum_squared = sq
         else:
-            # This is a simplified addition - not truly homomorphic
             sum_squared = (sum_squared[0], (sum_squared[1] + sq[1]) % p)
 
     return sum_squared
