@@ -172,7 +172,29 @@ def receive_messages(client_socket):
                     break  # ✅ Exit the loop if the server closes the connection
 
                 response = json.loads(response_data.decode())  # ✅ Decode response
+                signature = response.get("signature")
 
+                if signature:
+                    signable_request = {k: v for k, v in response.items() if k not in ["user2", "signature"]}
+                    request_string = json.dumps(signable_request, separators=(',', ':'))
+                    username = response.get("username")
+                    get_user_public_key = send_request(client_socket,{"command": "get_public_key", "user": username})
+                    username_public_key = get_user_public_key["public_key"]
+                    if not username_public_key:
+                        print("User's public key is not found")
+                        continue
+                    user_public_key = serialization.load_pem_public_key(username_public_key.encode())
+                    try:
+                        user_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+                        print("\nSignature verification success.\nPress enter to continue.")
+                    except InvalidSignature :
+                        print("\nSignature verification failed, message ignored.")
+                        continue
+                status = response.get("status")
+                if status == "error":
+                    print(response["message"])
+                elif status == "success":
+                    print(response["message"])
                 command = response.get("command")
 
                 # ✅ Handle different command types
@@ -388,7 +410,7 @@ def main():
     logged_in = False
     username = None
     private_key = None  # Store private key after login
-
+    
     while True:
         if not logged_in:
             clear_screen()
@@ -416,19 +438,20 @@ def main():
 
                 # Save private key to a file specific to the user
                 private_key_filename = f"{uname}_private.pem"
-                private_key_path = prompt_for_save_location(private_key_filename)
+                private_key_path = prompt_for_save_private_key(private_key_filename)
 
                 if private_key_path:
                     with open(private_key_path, "w") as key_file:
                         key_file.write(private_key_pem)
                     print(f"Private key saved to: {private_key_path}")
                 else:
-                    print("Warning: Private key not saved. Store it securely!")
+                    print("Warning: Private key not saved. You may want to recreate user!")
+                    input("Press Enter to continue...")  # Wait for user input
 
                 # Register user with public key
                 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 client.connect(("127.0.0.1", 5555))
-                response = send_request(client, {
+                response = send_request(client,{
                     "command": "register",
                     "username": uname,
                     "password_hash": hashed_pwd,
@@ -438,10 +461,9 @@ def main():
                 print(response["message"])
                 client.close()
                 if response["status"] == "success":
-                    private_key = private_key_pem  # Store in memory for use
-                    print("Registration successful. Please log in now.")
+                    
                     input("Press Enter to continue...")  # Wait for user input
-
+                    
                     continue  # Return to the main menu after registration
 
 
