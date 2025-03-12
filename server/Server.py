@@ -384,7 +384,7 @@ def process_request(request):
 
         friend_socket = active_clients[request["user1"]]
         friend_socket.send(json.dumps(request).encode())
-        return {"status": "success", "message": "Encrypted euclidean sent"}
+        return {"status": "success", "message": "Encrypted euclidean sent."}
     
     elif command == "remove_friend":
         with friendship_lock:

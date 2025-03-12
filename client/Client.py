@@ -9,6 +9,7 @@ import bcrypt
 import threading
 import traceback
 import time
+import psutil
 import hmac
 import hashlib
 from phe import generate_paillier_keypair, paillier
@@ -150,6 +151,7 @@ def process_proximity_request(request, client_socket):
     
 def handle_encrypted_distance(response):
     """Decrypt and process the encrypted distance received from a friend."""
+    global end_time
     try:
         user2 = response["user2"]
         enc_distance_ciphertext = response["enc_distance"]  # ✅ Convert back to int
@@ -166,12 +168,18 @@ def handle_encrypted_distance(response):
 
         # ✅ Square root to get the actual Euclidean distance
         distance = decrypted_distance ** 0.5
-        print(f"distance is {distance}")
+        
         if distance < 1000:
             print(f"{user2} is close!")
         else:
             print(f"{user2} is far!")
-
+        end_time = time.time()
+        # ✅ Calculate results
+        execution_time = end_time - start_time  # Time taken in seconds
+        if response["method"] == "1":
+            print(f"Execution Time using Paillier: {execution_time:.4f} seconds")
+        elif response["method"] == "2":
+            print(f"Execution Time using ElGamal: {execution_time:.4f} seconds")
     except Exception as e:
         print(f"[CLIENT ERROR] Failed to process encrypted distance: {e}")
         traceback.print_exc()  # ✅ Print detailed error log
@@ -223,17 +231,10 @@ def receive_messages(client_socket, username, private_key_pem):
                     try:
                         recipient_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
                         print("Signature verification success.")
+                        print("Press enter to continue.")
                     except InvalidSignature :
-                        print("Signature verification failed, message ignored.")
+                        print("Signature verification failed, message ignored. Press enter to continue.")
                         continue
-
-                print("Signature verification success.")
-
-                # status = response.get("status")
-                # if status == "error":
-                #     print(response["message"])
-                # elif status == "success":
-                #     print(response["message"])
 
                 if "message" in response:
                     print(response["message"])
@@ -244,9 +245,7 @@ def receive_messages(client_socket, username, private_key_pem):
                         print(f"[CLIENT ERROR] Decryption failed: {e}")
                 elif "status" in response and response["status"] == "error":
                     print(f"[SERVER ERROR] {response.get('error', 'Unknown error')}")
-                else:
-                    print("[CLIENT ERROR] Unexpected response format:", response)
-
+                
                 command = response.get("command")
 
                 # ✅ Handle different command types
@@ -439,6 +438,8 @@ def update_location(uname):
 
 
 def main():
+    global end_time
+    global start_time
     logged_in = False
     username = None
     
@@ -597,7 +598,10 @@ def main():
 
             elif choice == "2":  # Display Proximity
                 method = input("Choose 1 for Paillier, 2 for Elgamal : ")
+
+                start_time = time.time()
                 check_proximity(username, client, private_key_pem, method)
+                
                 time.sleep(0.1)
                 input("Press enter to continue...\n")
                 
