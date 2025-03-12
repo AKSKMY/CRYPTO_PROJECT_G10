@@ -186,7 +186,7 @@ def handle_encrypted_distance(response):
 
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(0.2)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(1)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
