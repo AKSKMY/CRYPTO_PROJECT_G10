@@ -81,13 +81,16 @@ def handle_client(client_socket):
                 #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
             request = json.loads(data)
-            print(f"Server received request: {request}")
+            if(request["username"]):
+                print(f"Server received command: '{request['command']}' from user '{request['username']}'")
+            else:
+                print(f"Server received command: '{request['command']}")
             if request["command"] == "login":
                 username = request["username"]
                 active_clients[username] = client_socket  # ✅ Store active client
                 print(f"[SERVER] {username} is now online.")
             response = process_request(request)
-            print(f"Server sending response: {response}")
+            #print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
         except:
             break
@@ -198,7 +201,7 @@ def process_request(request):
 
             # ✅ Encrypt the AES key with the user’s RSA public key
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key)
-            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_public_key": encrypted_recipient_public_key.hex()}
+            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_public_key": encrypted_recipient_public_key.hex(), "message": "Encrypted keys sent."}
         
         return {"status": "error", "message": "User not found or no public key stored"}
     
@@ -365,14 +368,6 @@ def process_request(request):
         else:
             return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
     
-    elif command == "view_inbox":
-        user_id = get_user_id(request["user"])
-        if user_id:
-            cursor.execute("SELECT users.username, message, timestamp FROM messages JOIN users ON messages.sender_id = users.id WHERE recipient_id=? ORDER BY timestamp DESC", (user_id,))
-            messages = [{"from": row[0], "message": row[1], "timestamp": row[2]} for row in cursor.fetchall()]
-            return {"status": "success", "inbox": messages}
-        return {"status": "error", "message": "User not found"}
-
     elif command == "remove_friend":
         user_id = get_user_id(request["username"])
         friend_id = get_user_id(request["friend"])
@@ -396,22 +391,11 @@ def process_request(request):
         return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
 
         # In process_request function on the server
-    elif command == "clear_messages":
-        username = request["username"]
-        user_id = get_user_id(username)
-
-        if user_id:
-            try:
-                cursor.execute("DELETE FROM messages WHERE recipient_id=?", (user_id,))
-                conn.commit()
-                return {"status": "success", "message": "All messages deleted"}
-            except Exception as e:
-                return {"status": "error", "message": f"Error deleting messages: {str(e)}"}
-        return {"status": "error", "message": "No messages to delete for the current user!"}
-
+    
     elif command == "logout":
         username = request["username"]
         del active_clients[username]
+        print(f"{username} has logged out.")
         return {"status": "success", "message": f"{username} has logged out."}
     return {"status": "error", "message": f"Unknown command {command}"}
     

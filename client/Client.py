@@ -15,7 +15,7 @@ sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from algorithms.rsa_private_auth import is_private_key_correct
 from algorithms.elgamal import *
-from algorithms.rsa_keygen import generate_rsa_keys, encrypt_message, decrypt_message
+from algorithms.rsa_keygen import generate_rsa_keys
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -91,8 +91,6 @@ def process_proximity_request(request, client_socket):
         enc_2_x1_x2 = enc_x1 * x2
         enc_2_y1_y2 = enc_y1 * y2
         # Compute encrypted Euclidean distance: (x1 - x2)^2 + (y1 - y2)^2
-        # enc_neg_2_x1_x2 = enc_2_x1_x2 ** -1  # Compute modular inverse
-        # enc_neg_2_y1_y2 = enc_2_y1_y2 ** -1
         # ✅ Compute (x1 - x2)^2 in encrypted form
         enc_dx2 = enc_x1_sq - 2 * enc_2_x1_x2 + enc_x2_sq
         enc_dy2 = enc_y1_sq - 2 * enc_2_y1_y2 + enc_y2_sq
@@ -105,10 +103,6 @@ def process_proximity_request(request, client_socket):
         enc_a = request['enc_a']
         # Calculate approximate encrypted distance (simplified demonstration)
         enc_distance = euclidean_distance_homomorphic(request['public_key'], enc_a, enc_b)
-
-
-
-
     # Send the result back to User1 via the server
     response = {
         "command": "send_encrypted_distance",
@@ -131,22 +125,8 @@ def process_proximity_request(request, client_socket):
         process_proximity_request(response, client_socket)
 
     elif "command" in response and response["command"] == "send_encrypted_distance":
-        user2 = response["user2"]
-        enc_distance_ciphertext = response["enc_distance"]  # ✅ Convert back to int
-
-        # ✅ Reconstruct the EncryptedNumber
-        enc_distance = paillier.EncryptedNumber(paillier_public_key, enc_distance_ciphertext)
-
-        # ✅ Decrypt the value
-        decrypted_distance = paillier_private_key.decrypt(enc_distance)
-
-        # ✅ Square root to get the actual Euclidean distance
-        distance = decrypted_distance ** 0.5
-
-        if distance < 1000:
-            print(f"{user2} is close!")
-        else:
-            print(f"{user2} is far!")
+        print(f"response of send_encrypted_distance is {response}")
+        handle_encrypted_distance(response)
     
 def handle_encrypted_distance(response):
     """Decrypt and process the encrypted distance received from a friend."""
@@ -166,7 +146,7 @@ def handle_encrypted_distance(response):
 
         # ✅ Square root to get the actual Euclidean distance
         distance = decrypted_distance ** 0.5
-
+        print(f"distance is {distance}")
         if distance < 1000:
             print(f"{user2} is close!")
         else:
@@ -177,7 +157,7 @@ def handle_encrypted_distance(response):
         traceback.print_exc()  # ✅ Print detailed error log
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(5)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(0.4)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
@@ -189,31 +169,41 @@ def receive_messages(client_socket, username, private_key_pem):
                 
                 response = json.loads(response_data.decode())  # ✅ Decode response
                 signature = response.get("signature")
-
+                
                 if signature:
                     signable_request = {k: v for k, v in response.items() if k not in ["user2", "signature"]}
                     request_string = json.dumps(signable_request, separators=(',', ':'))
                     recipient = response.get("username")
                     get_encrypted_recipient_public_key = send_request(client_socket,{"command": "get_public_key", "user": username, "recipient": recipient})
+                    if(get_encrypted_recipient_public_key["status"] == "error"):
+                        print("Client timed out")
+                        continue
                     encrypted_recipient_public_key = get_encrypted_recipient_public_key["encrypted_public_key"]
                     if not encrypted_recipient_public_key:
                         print("User's public key is not found")
                         continue
                     # ✅ Decrypt AES key using RSA private key
                     encrypted_aes_key = get_encrypted_recipient_public_key["encrypted_aes_key"]
-                    private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
-                    
-                    aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
+                    try:
+                        private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+                        aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
 
+                    except:
+                        #print(private_key_pem)
+                        aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
+                    #print("reached")
+                    
+                    #print("here")
                     # ✅ Decrypt recipient's public key using AES
                     recipient_public_key = decrypt_aes(encrypted_recipient_public_key, aes_key)
                     recipient_public_key = serialization.load_pem_public_key(recipient_public_key.encode())
                     try:
                         recipient_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
+                        print("Signature verification success.")
                     except InvalidSignature :
                         print("Signature verification failed, message ignored.")
                         continue
-                print("Signature verification success.")
+                
                 status = response.get("status")
                 if status == "error":
                     print(response["message"])
@@ -537,10 +527,6 @@ def main():
                     input("Press Enter to return to the Welcome page...")
                     continue  # Return to Welcome page
                 
-
-
-
-            
             elif choice == "3":
                 break
             
@@ -555,10 +541,8 @@ def main():
             print("1. Update Location")
             print("2. Display Proximity")
             print("3. Add Friend")
-            print("4. Send Encrypted Message (Only if you are in close proximity or friend)")
-            print("5. View Inbox (Decrypt Messages)")
-            print("6. Remove Friend")
-            print("7. Logout")
+            print("4. Remove Friend")
+            print("5. Logout")
             choice = input("Select an option: ").strip()
 
             if choice == "1":  # Update Location
@@ -588,84 +572,7 @@ def main():
                     print(response["message"])
                 input("Press Enter to continue...")
 
-            elif choice == "4":  # Send Encrypted Message
-                recipient = input("Enter recipient's username: ").strip()
-                if not recipient:
-                    print("Error: Recipient's username cannot be empty.")
-                    input("Press Enter to continue...")
-                    continue
-
-                message = input("Enter your message: ").strip()
-                if not message:
-                    print("Error: Message cannot be empty.")
-                    input("Press Enter to continue...")
-                    continue
-
-                # Fetch recipient's public key
-                response = send_request({"command": "get_public_key", "user": username, "recipient": recipient})
-                if response["status"] != "success":
-                    print("Error: Unable to fetch recipient's public key.")
-                    input("Press Enter to continue...")
-                    continue
-
-                recipient_public_key = response["public_key"]
-                encrypted_message = encrypt_message(recipient_public_key, message)
-
-                response = send_request({
-                    "command": "send_message",
-                    "sender": username,
-                    "recipient": recipient,
-                    "message": encrypted_message
-                })
-                print(response["message"])
-                input("Press Enter to continue...")
-
-            elif choice == "5":  # View Inbox (Decrypt Messages)
-                if private_key_pem is None:
-                    print("Error: No private key loaded. Please select your private key.")
-                    
-                    # Prompt user to select private key
-                    private_key_path = filedialog.askopenfilename(
-                        title="Select Private Key File",
-                        filetypes=[("PEM files", "*.pem"), ("All files", "*.*")]
-                    )
-
-                    if private_key_path and os.path.exists(private_key_path):
-                        with open(private_key_path, "r") as key_file:
-                            private_key_pem = key_file.read()
-                        print("Private key loaded successfully.")
-                    else:
-                        print("Error: No private key selected. Cannot decrypt messages.")
-                        input("Press Enter to continue...")
-                        continue  # Return to menu
-
-                # Now proceed to decrypt messages
-                response = send_request({"command": "view_inbox", "user": username})
-
-                if response["status"] == "success":
-                    inbox_messages = response.get("inbox", [])
-
-                    if not inbox_messages:
-                        print("\nInbox is empty. No messages to display.")
-                    else:
-                        print("\nInbox Messages:")
-                        for message in inbox_messages:
-                            sender = message["from"]
-                            timestamp = message["timestamp"]
-                            encrypted_message = message["message"]
-
-                            try:
-                                decrypted_message = decrypt_message(private_key_pem, encrypted_message)
-                                print(f"From {sender} at {timestamp}: {decrypted_message}")
-                            except Exception as e:
-                                print(f"From {sender} at {timestamp}: (Decryption failed - {str(e)})")
-
-                else:
-                    print("Error:", response["message"])
-
-                input("Press Enter to continue...")
-
-            elif choice == "6":  # Remove Friend
+            elif choice == "4":  # Remove Friend
                 friend = input("Enter friend's username to remove: ").strip()
                 if not friend:
                     print("Error: Friend's username cannot be empty.")
@@ -675,10 +582,8 @@ def main():
 
                 input("Press Enter to continue...")
 
-            elif choice == "7":  # Logout
+            elif choice == "5":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
-                    response = send_request(client,{"command": "clear_messages", "username": username})
-                    print(response["message"])
                     response = send_request(client,{"command": "logout", "username": username})
                     logged_in = False
                     username = None
