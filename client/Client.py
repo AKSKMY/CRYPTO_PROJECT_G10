@@ -10,6 +10,7 @@ import threading
 import traceback
 import time
 from phe import generate_paillier_keypair, paillier
+
 # Ensure the parent directory is in the Python path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -20,13 +21,13 @@ from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from cryptography.exceptions import InvalidSignature
+
 # Store Paillier key pair
 paillier_public_key = None
 paillier_private_key = None
 
 # Store Elgamal key pair
 keys = None
-
 
 def generate_salt():
     """Generate a random 16-byte salt and return it as a base64 string."""
@@ -106,9 +107,6 @@ def process_proximity_request(request, client_socket):
         # Calculate approximate encrypted distance (simplified demonstration)
         enc_distance = euclidean_distance_homomorphic(request['public_key'], enc_a, enc_b)
 
-
-
-
     # Send the result back to User1 via the server
     response = {
         "command": "send_encrypted_distance",
@@ -175,6 +173,7 @@ def handle_encrypted_distance(response):
     except Exception as e:
         print(f"[CLIENT ERROR] Failed to process encrypted distance: {e}")
         traceback.print_exc()  # ✅ Print detailed error log
+
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
     client_socket.settimeout(5)  # ✅ Prevents indefinite blocking
@@ -194,31 +193,48 @@ def receive_messages(client_socket, username, private_key_pem):
                     signable_request = {k: v for k, v in response.items() if k not in ["user2", "signature"]}
                     request_string = json.dumps(signable_request, separators=(',', ':'))
                     recipient = response.get("username")
+
                     get_encrypted_recipient_public_key = send_request(client_socket,{"command": "get_public_key", "user": username, "recipient": recipient})
                     encrypted_recipient_public_key = get_encrypted_recipient_public_key["encrypted_public_key"]
+
                     if not encrypted_recipient_public_key:
                         print("User's public key is not found")
                         continue
+
                     # ✅ Decrypt AES key using RSA private key
                     encrypted_aes_key = get_encrypted_recipient_public_key["encrypted_aes_key"]
-                    private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
+
+                    if isinstance(private_key_pem, str):
+                        private_key_pem = private_key_pem.encode()
+                        private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                    elif isinstance(private_key_pem, bytes):
+                        private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                    elif isinstance(private_key_pem, rsa.RSAPrivateKey):
+                        private_key = private_key_pem  # ✅ Already loaded, so do nothing
+                    else:
+                        print("[CLIENT ERROR] Invalid private key format")
+                        return
                     
-                    aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
+                    aes_key = decrypt_aes_key(encrypted_aes_key, private_key)
 
                     # ✅ Decrypt recipient's public key using AES
                     recipient_public_key = decrypt_aes(encrypted_recipient_public_key, aes_key)
                     recipient_public_key = serialization.load_pem_public_key(recipient_public_key.encode())
+                    
                     try:
                         recipient_public_key.verify(bytes.fromhex(signature), request_string.encode(), padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256())
                     except InvalidSignature :
                         print("Signature verification failed, message ignored.")
                         continue
+
                 print("Signature verification success.")
-                status = response.get("status")
-                if status == "error":
-                    print(response["message"])
-                elif status == "success":
-                    print(response["message"])
+
+                # status = response.get("status")
+                # if status == "error":
+                #     print(response["message"])
+                # elif status == "success":
+                #     print(response["message"])
+
                 command = response.get("command")
 
                 # ✅ Handle different command types
@@ -243,22 +259,24 @@ def receive_messages(client_socket, username, private_key_pem):
         print(f"[CLIENT ERROR] Unexpected error in receive_messages: {e}")
         traceback.print_exc()  # ✅ Print full traceback for debugging       
         
-        
-    
-        
 def send_request(client,request,private_key_pem=None):
     try:
         signable_request = {k: v for k, v in request.items() if k not in ["user2", "signature"]}
         request_string = json.dumps(signable_request, separators=(',', ':'))
         if private_key_pem:
-            #request["signature"] = serialization.load_pem_private_key(private_key_pem.encode(), password=None).sign(request_string, padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256()).hex()
-            private_key = serialization.load_pem_private_key(
-            private_key_pem.encode(),  # Convert string PEM to key object
-            password=None
-        )
+            # ✅ Ensure private_key_pem is properly loaded
+            if isinstance(private_key_pem, str):
+                private_key_pem = private_key_pem.encode()
+                private_key_pem = serialization.load_pem_private_key(private_key_pem, password=None)
+            elif isinstance(private_key_pem, bytes):
+                private_key_pem = serialization.load_pem_private_key(private_key_pem, password=None)
+            elif isinstance(private_key_pem, rsa.RSAPrivateKey):
+                private_key_pem = private_key_pem  # Already an RSA private key object
+            else:
+                raise ValueError("Invalid private key format")
 
         # ✅ Sign the entire JSON request string
-            signature = private_key.sign(
+            signature = private_key_pem.sign(
                 request_string.encode(),  # Convert JSON string to bytes
                 padding.PSS(
                     mgf=padding.MGF1(hashes.SHA256()),
@@ -271,11 +289,11 @@ def send_request(client,request,private_key_pem=None):
             request["signature"] = signature.hex()
         else:
             request["signature"] = None
-        client.send(json.dumps(request).encode())
+        client.sendall(json.dumps(request).encode())
         response_data = client.recv(4096)
 
         if not response_data:
-            print("If not send in send_request")
+            print("No response from server.")
             raise ValueError("No response from server")
         response = json.loads(response_data.decode())
         return response
@@ -536,10 +554,6 @@ def main():
                     print("Error: Login failed -", response["message"])  # Show proper error message
                     input("Press Enter to return to the Welcome page...")
                     continue  # Return to Welcome page
-                
-
-
-
             
             elif choice == "3":
                 break
@@ -569,6 +583,7 @@ def main():
                 check_proximity(username, client, private_key_pem, method)
                 time.sleep(0.1)
                 input("Press enter to continue...\n")
+                
             elif choice == "3":  # Add Friend
                 friend_name = input("Enter the username of the friend you want to add: ").strip()
 
@@ -577,16 +592,36 @@ def main():
                     continue
 
                 # Check if a message history exists before adding the friend
-                response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name},private_key_pem)
+                response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name}, private_key_pem)
 
-                #print("DEBUG: Server response:", response)  # Debugging
-
-                if response["status"] == "success":
+                # if response["status"] == "success":
+                if "encrypted_message" in response:
                     # If a message history exists, proceed with adding the friend
-                    print(response["message"])
+                    encrypted_message = response["encrypted_message"]
+
+                    # ✅ Decrypt AES key using RSA private key
+                    encrypted_aes_key = response["encrypted_aes_key"]
+                    # ✅ Ensure private_key_pem is in correct format
+                    if isinstance(private_key_pem, str):
+                        private_key_pem = private_key_pem.encode()
+                        private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                    elif isinstance(private_key_pem, bytes):
+                        private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                    elif isinstance(private_key_pem, rsa.RSAPrivateKey):
+                        private_key = private_key_pem  # Already loaded
+                    else:
+                        print("[CLIENT ERROR] Invalid private key format")
+                        return
+                    
+                    aes_key = decrypt_aes_key(encrypted_aes_key, private_key)
+
+                    # ✅ Decrypt recipient's public key using AES
+                    decrypted_message = decrypt_aes(encrypted_message, aes_key)
+                    print(decrypted_message)
                 else:
                     print(response["message"])
                 input("Press Enter to continue...")
+                continue
 
             elif choice == "4":  # Send Encrypted Message
                 recipient = input("Enter recipient's username: ").strip()
@@ -671,9 +706,33 @@ def main():
                     print("Error: Friend's username cannot be empty.")
                 else:
                     response = send_request(client,{"command": "remove_friend", "username": username, "friend": friend}, private_key_pem)
-                    print(response["message"])
 
-                input("Press Enter to continue...")
+                    if "encrypted_message" in response:
+                        encrypted_message = response["encrypted_message"]
+
+                        # ✅ Decrypt AES key using RSA private key
+                        encrypted_aes_key = response["encrypted_aes_key"]
+                        # ✅ Ensure private_key_pem is in correct format
+                        if isinstance(private_key_pem, str):
+                            private_key_pem = private_key_pem.encode()
+                            private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                        elif isinstance(private_key_pem, bytes):
+                            private_key = serialization.load_pem_private_key(private_key_pem, password=None)
+                        elif isinstance(private_key_pem, rsa.RSAPrivateKey):
+                            private_key = private_key_pem  # Already loaded
+                        else:
+                            print("[CLIENT ERROR] Invalid private key format")
+                            return
+                        
+                        aes_key = decrypt_aes_key(encrypted_aes_key, private_key)
+
+                        # ✅ Decrypt recipient's public key using AES
+                        decrypted_message = decrypt_aes(encrypted_message, aes_key)
+                        print(decrypted_message)
+                    else:
+                        print(response["message"])
+                    input("Press Enter to continue...")
+                    continue
 
             elif choice == "7":  # Logout
                 if logged_in:  # Ensure user is logged in before logging out
