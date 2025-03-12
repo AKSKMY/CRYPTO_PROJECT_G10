@@ -151,7 +151,7 @@ def process_proximity_request(request, client_socket):
         process_proximity_request(response, client_socket)
 
     elif "command" in response and response["command"] == "send_encrypted_distance":
-        print(f"response of send_encrypted_distance is {response}")
+        #print(f"response of send_encrypted_distance is {response}")
         handle_encrypted_distance(response)
     
 def handle_encrypted_distance(response):
