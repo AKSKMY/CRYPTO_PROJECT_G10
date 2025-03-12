@@ -98,11 +98,13 @@ def process_proximity_request(request, client_socket):
     if request["method"] == "1":
         x2, y2 = location_data["x_location"], location_data["y_location"]
         paillier_public_key_1 = paillier.PaillierPublicKey(int(public_key_n))
+
         # Convert received encrypted values to Paillier format
         enc_x1 = paillier.EncryptedNumber(paillier_public_key_1, int(request["enc_x1"]))
         enc_y1 = paillier.EncryptedNumber(paillier_public_key_1, int(request["enc_y1"]))
         enc_x1_sq = paillier.EncryptedNumber(paillier_public_key_1, int(request["enc_x1_sq"]))
         enc_y1_sq = paillier.EncryptedNumber(paillier_public_key_1, int(request["enc_y1_sq"]))
+
         # Encrypt User2's values using User1's public key
         enc_x2 = paillier_public_key_1.encrypt(x2)
         enc_y2 = paillier_public_key_1.encrypt(y2)
@@ -110,17 +112,20 @@ def process_proximity_request(request, client_socket):
         enc_y2_sq = enc_y2 * y2
         enc_2_x1_x2 = enc_x1 * x2
         enc_2_y1_y2 = enc_y1 * y2
+
         # Compute encrypted Euclidean distance: (x1 - x2)^2 + (y1 - y2)^2
         # ✅ Compute (x1 - x2)^2 in encrypted form
         enc_dx2 = enc_x1_sq - 2 * enc_2_x1_x2 + enc_x2_sq
         enc_dy2 = enc_y1_sq - 2 * enc_2_y1_y2 + enc_y2_sq
         enc_distance = enc_dx2 + enc_dy2  # Final encrypted squared Euclidean distance
         enc_distance = enc_distance.ciphertext()
+
     elif request["method"] == "2":
         x2, y2 = location_data["x_location"], location_data["y_location"]
         b = [x2, y2]
         enc_b = [elgamal_encrypt(request['public_key'], val) for val in b]
         enc_a = request['enc_a']
+
         # Calculate approximate encrypted distance (simplified demonstration)
         enc_distance = euclidean_distance_homomorphic(request['public_key'], enc_a, enc_b)
 
@@ -176,17 +181,20 @@ def handle_encrypted_distance(response):
         end_time = time.time()
         # ✅ Calculate results
         execution_time = end_time - start_time  # Time taken in seconds
+
         if response["method"] == "1":
             print(f"Execution Time using Paillier: {execution_time:.4f} seconds")
+
         elif response["method"] == "2":
             print(f"Execution Time using ElGamal: {execution_time:.4f} seconds")
+
     except Exception as e:
         print(f"[CLIENT ERROR] Failed to process encrypted distance: {e}")
         traceback.print_exc()  # ✅ Print detailed error log
 
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(0.2)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(1)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
@@ -364,6 +372,7 @@ def check_proximity(username, client_socket, private_key_pem, method):
         location_data = json.load(json_file)
 
     x1, y1 = location_data["x_location"], location_data["y_location"]
+
     if method == "1":
         # Generate a new Paillier key pair for this session
         paillier_public_key, paillier_private_key = generate_paillier_keypair(n_length=1024)
@@ -386,6 +395,7 @@ def check_proximity(username, client_socket, private_key_pem, method):
             "signature": None,
             "method": method
         }
+
     elif method == "2":
         global keys
         keys = elgamal_generate_keys()
@@ -612,16 +622,13 @@ def main():
                     print("Error: Friend username cannot be empty.")
                     continue
 
-                # Check if a message history exists before adding the friend
                 response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name}, private_key_pem)
-                # if response["status"] == "success":
+
                 if "encrypted_message" in response:
                     encrypted_message = response["encrypted_message"]
 
                     # ✅ Decrypt AES key using RSA private key
                     encrypted_aes_key = response["encrypted_aes_key"]
-
-                    # private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
 
                     # ✅ Ensure private_key_pem is correctly loaded only once
                     if isinstance(private_key_pem, str):
@@ -651,8 +658,6 @@ def main():
 
                         # ✅ Decrypt AES key using RSA private key
                         encrypted_aes_key = response["encrypted_aes_key"]
-
-                        # private_key_pem = serialization.load_pem_private_key(private_key_pem.encode(), password=None)
                         
                         # ✅ Ensure private_key_pem is correctly loaded only once
                         if isinstance(private_key_pem, str):

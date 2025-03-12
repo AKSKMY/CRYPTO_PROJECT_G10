@@ -81,7 +81,6 @@ def handle_client(client_socket):
         try:
             data = client_socket.recv(4096).decode().strip()  # Strip spaces and newlines
             if not data:
-                #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
             request = json.loads(data)
             try:
@@ -94,7 +93,6 @@ def handle_client(client_socket):
                 print(f"[SERVER] {username} is now online.")
 
             response = process_request(request)
-            #print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
         except:
             break
@@ -268,7 +266,6 @@ def process_request(request):
                     encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
                     hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-                    # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
                     return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
             
@@ -276,7 +273,6 @@ def process_request(request):
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
                 hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
                 return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
@@ -291,7 +287,6 @@ def process_request(request):
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
             hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
             return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
         
@@ -313,8 +308,6 @@ def process_request(request):
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
             hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
-
             return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
         
         encrypted_message = encrypt_aes("User not found.", aes_key)
@@ -352,11 +345,6 @@ def process_request(request):
                 socket.send(json.dumps(response).encode())
                 return response
 
-                # encrypted_message = encrypt_aes("No friends found.", aes_key)
-                # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
-
-                # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
-
             # Forward encrypted values to friends
             for friend in friends:
                 if friend in active_clients:
@@ -369,11 +357,6 @@ def process_request(request):
                     socket = active_clients[username]
                     socket.send(json.dumps(response).encode())
                     return response
-
-                    # encrypted_message = encrypt_aes(f"{friend} is not online", aes_key)
-                    # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
-
-                    # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
                 
             return {"status": "success", "message": f"Sent encrypted to {friend}"}
 
@@ -403,7 +386,6 @@ def process_request(request):
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
                 
                 hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
                 return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
@@ -418,7 +400,6 @@ def process_request(request):
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
                 hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
                 return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
@@ -431,11 +412,8 @@ def process_request(request):
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
             
             hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
-            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
             return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
-
-        # In process_request function on the server
     
     elif command == "logout":
         username = request["username"]

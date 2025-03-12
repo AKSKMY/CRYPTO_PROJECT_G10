@@ -1,4 +1,0 @@
-For more hidden error handling
-
-1. ERR_1001: COULD NOT RETRIEVE SALT = Possible password or username is incorrect/does not exist
-2.

@@ -4,7 +4,7 @@ from cryptography.hazmat.primitives import hashes
 import base64
 import os
 
-SECRET_KEY = b"supersecretkey1234567890123456"  # Should be stored securely (e.g., .env file)
+SECRET_KEY = b"supersecretkey1234567890123456"
 
 def derive_key(salt):
     """Derives a 256-bit AES key from a password and salt."""
