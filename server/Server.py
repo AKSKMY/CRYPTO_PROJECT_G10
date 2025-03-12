@@ -12,6 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
+friendship_lock = threading.Lock()  # Global lock
 
 def is_socket_valid(sock):
     readable, writable, _ = select.select([sock], [sock], [], 0)
@@ -89,6 +90,7 @@ def handle_client(client_socket):
                 username = request["username"]
                 active_clients[username] = client_socket  # ✅ Store active client
                 print(f"[SERVER] {username} is now online.")
+                
             response = process_request(request)
             #print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
@@ -140,6 +142,7 @@ def process_request(request):
             print("Verification successful")
         except InvalidSignature :
             return {"status": "error", "message": "Signature verification failed"}
+        
     if command == "register":
         username, password_hash, public_key, salt = request["username"], request["password_hash"], request["public_key"], request["salt"]
         
@@ -204,86 +207,98 @@ def process_request(request):
             return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_public_key": encrypted_recipient_public_key.hex(), "message": "Encrypted keys sent."}
         
         return {"status": "error", "message": "User not found or no public key stored"}
-    
-    elif command == "check_message_history":
-        user_id = get_user_id(request["user"])
-        friend_id = get_user_id(request["friend"])
-
-        if not user_id or not friend_id:
-            return {"status": "error", "message": "User or friend not found"}
-
-        # Check if the user has sent a message to the friend
-        cursor.execute(
-            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
-            (user_id, friend_id)
-        )
-        message_sent = cursor.fetchone()
-
-        if message_sent:
-            return {"status": "success", "message": "Message history found"}
-        else:
-            return {"status": "error", "message": "No message history found"}
 
 
     elif command == "add_friend":
-        user_id = get_user_id(request["username"])
-        friend_id = get_user_id(request["friend"])
+        with friendship_lock:  # Prevent race condition
+            user_id = get_user_id(request["username"])
+            friend_id = get_user_id(request["friend"])
 
-        if not user_id or not friend_id:
-            return {"status": "error", "message": "User not found"}
+            cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
+            user_public_key = cursor.fetchone()[0]
+            user_public_key_pem = serialization.load_pem_public_key(user_public_key.encode())
 
-        # ✅ Check if a friendship record already exists
-        cursor.execute(
-            "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-            (user_id, friend_id, friend_id, user_id)
-        )
-        existing_friendship = cursor.fetchone()
-        if existing_friendship:
-            friendship_status = existing_friendship[0]
+            aes_key = generate_aes_key()
 
-            # ✅ If both users already sent a request, change status to "accepted"
-            if friendship_status == "pending":
-                cursor.execute(
-                    "UPDATE friendships SET status='accepted' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_id, friend_id, friend_id, user_id)
-                )
-                conn.commit()
+            if not user_id or not friend_id:
+                encrypted_message = encrypt_aes("User not found.", aes_key)
+                encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-                # ✅ Fetch and exchange public keys
-                cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
-                user_public_key = cursor.fetchone()[0]
-                cursor.execute("SELECT public_key FROM users WHERE id=?", (friend_id,))
-                friend_public_key = cursor.fetchone()[0]
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
 
-                cursor.execute(
-                    "UPDATE friendships SET public_key1=?, public_key2=? WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_public_key, friend_public_key, user_id, friend_id, friend_id, user_id)
-                )
-                conn.commit()
+            # ✅ Check if a friendship record already exists
+            cursor.execute(
+                "SELECT status FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                (user_id, friend_id, friend_id, user_id)
+            )
+            existing_friendship = cursor.fetchone()
+            if existing_friendship:
+                friendship_status = existing_friendship[0]
 
-                return {"status": "success", "message": f"Friendship accepted! Public keys exchanged."}
+                # ✅ If both users already sent a request, change status to "accepted"
+                if friendship_status == "pending":
+                    cursor.execute(
+                        "UPDATE friendships SET status='accepted' WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                        (user_id, friend_id, friend_id, user_id)
+                    )
+                    conn.commit()
 
-        
-            return {"status": "error", "message": "Friend request already sent or already friends."}
+                    # ✅ Fetch and exchange public keys
 
-        # ✅ If no prior friendship exists, insert a new pending request
-        cursor.execute(
-        "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
-        (user_id, friend_id)
-        )
-        conn.commit()
+                    cursor.execute("SELECT public_key FROM users WHERE id=?", (friend_id,))
+                    friend_public_key = cursor.fetchone()[0]
 
-        return {"status": "success", "message": f"Friend request sent to {request['friend']}."}
+                    cursor.execute(
+                        "UPDATE friendships SET public_key1=?, public_key2=? WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                        (user_public_key, friend_public_key, user_id, friend_id, friend_id, user_id)
+                    )
+                    conn.commit()
+
+                    encrypted_message = encrypt_aes("Friendship accepted! Public keys exchanged.", aes_key)
+                    encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                    return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+            
+                encrypted_message = encrypt_aes("Friend request already sent or already friends.", aes_key)
+                encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+
+            # ✅ If no prior friendship exists, insert a new pending request
+            cursor.execute(
+            "INSERT INTO friendships (user_id1, user_id2, status) VALUES (?, ?, 'pending')",
+            (user_id, friend_id)
+            )
+            conn.commit()
+
+            encrypted_message = encrypt_aes(f"Friend request sent to {request['friend']}.", aes_key)
+            encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
         
     elif command == "update_location":
         user_id = get_user_id(request["username"])
+
+        user_public_key = cursor.fetchone()[0]
+        user_public_key_pem = serialization.load_pem_public_key(user_public_key.encode())
+
+        aes_key = generate_aes_key()
+
         if user_id:
             x, y = request["x"], request["y"]
             cursor.execute("INSERT INTO locations (user_id, x, y) VALUES (?, ?, ?) ON CONFLICT(user_id) DO UPDATE SET x=?, y=?", 
                            (user_id, x, y, x, y))
             conn.commit()
-            return {"status": "success", "message": "Location updated"}
-        return {"status": "error", "message": "User not found"}
+
+            encrypted_message = encrypt_aes("Location updated.", aes_key)
+            encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+        
+        encrypted_message = encrypt_aes("User not found.", aes_key)
+        encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+        return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
 
     elif command == "check_proximity":
         try:
@@ -293,6 +308,12 @@ def process_request(request):
 
             if not user_id:
                 return {"status": "error", "message": "User not found"}
+            
+            cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
+            user_public_key = cursor.fetchone()[0]
+            user_public_key_pem = serialization.load_pem_public_key(user_public_key.encode())
+
+            aes_key = generate_aes_key()
 
             # Find all friends
             cursor.execute(
@@ -308,6 +329,12 @@ def process_request(request):
                 socket = active_clients[username]
                 socket.send(json.dumps(response).encode())
                 return response
+
+                # encrypted_message = encrypt_aes("No friends found.", aes_key)
+                # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+
             # Forward encrypted values to friends
             for friend in friends:
                 if friend in active_clients:
@@ -320,12 +347,19 @@ def process_request(request):
                     socket = active_clients[username]
                     socket.send(json.dumps(response).encode())
                     return response
+
+                    # encrypted_message = encrypt_aes(f"{friend} is not online", aes_key)
+                    # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                    # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                
             return {"status": "success", "message": f"Sent encrypted to {friend}"}
 
         except Exception as error:
             print(error)
     
     elif command == "send_encrypted_distance":
+
         friend_socket = active_clients[request["user1"]]
         friend_socket.send(json.dumps(request).encode())
         return {"status": "success", "message": "Encrypted euclidean sent."}
@@ -368,26 +402,44 @@ def process_request(request):
             return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
     
     elif command == "remove_friend":
-        user_id = get_user_id(request["username"])
-        friend_id = get_user_id(request["friend"])
+        with friendship_lock:
+            user_id = get_user_id(request["username"])
+            friend_id = get_user_id(request["friend"])
 
-        if not user_id or not friend_id:
-            return {"status": "error", "message": "User not found"}
+            cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
+            user_public_key = cursor.fetchone()[0]
+            user_public_key_pem = serialization.load_pem_public_key(user_public_key.encode())
 
-        # Check if they are actually friends
-        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_id, friend_id, friend_id, user_id))
-        friendship_exists = cursor.fetchone()
+            aes_key = generate_aes_key()
 
-        if not friendship_exists:
-            return {"status": "error", "message": "You are not friends with this user"}
+            if not user_id or not friend_id:
 
-        # Remove friendship from database
-        cursor.execute("DELETE FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                    (user_id, friend_id, friend_id, user_id))
-        conn.commit()
+                encrypted_message = encrypt_aes("User not found.", aes_key)
+                encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-        return {"status": "success", "message": f"You are no longer friends with {request['friend']}"}
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+
+            # Check if they are actually friends
+            cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                        (user_id, friend_id, friend_id, user_id))
+            friendship_exists = cursor.fetchone()
+
+            if not friendship_exists:
+
+                encrypted_message = encrypt_aes("You are not friends with this user.", aes_key)
+                encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+
+            # Remove friendship from database
+            cursor.execute("DELETE FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
+                        (user_id, friend_id, friend_id, user_id))
+            conn.commit()
+
+            encrypted_message = encrypt_aes(f"You are no longer friends with {request['friend']}", aes_key)
+            encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
 
         # In process_request function on the server
     
