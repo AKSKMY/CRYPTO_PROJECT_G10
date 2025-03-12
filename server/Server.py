@@ -90,6 +90,7 @@ def handle_client(client_socket):
                 username = request["username"]
                 active_clients[username] = client_socket  # ✅ Store active client
                 print(f"[SERVER] {username} is now online.")
+                
             response = process_request(request)
             #print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
@@ -206,25 +207,6 @@ def process_request(request):
             return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_public_key": encrypted_recipient_public_key.hex(), "message": "Encrypted keys sent."}
         
         return {"status": "error", "message": "User not found or no public key stored"}
-    
-    elif command == "check_message_history":
-        user_id = get_user_id(request["user"])
-        friend_id = get_user_id(request["friend"])
-
-        if not user_id or not friend_id:
-            return {"status": "error", "message": "User or friend not found"}
-
-        # Check if the user has sent a message to the friend
-        cursor.execute(
-            "SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? LIMIT 1",
-            (user_id, friend_id)
-        )
-        message_sent = cursor.fetchone()
-
-        if message_sent:
-            return {"status": "success", "message": "Message history found"}
-        else:
-            return {"status": "error", "message": "No message history found"}
 
 
     elif command == "add_friend":
@@ -326,6 +308,12 @@ def process_request(request):
 
             if not user_id:
                 return {"status": "error", "message": "User not found"}
+            
+            cursor.execute("SELECT public_key FROM users WHERE id=?", (user_id,))
+            user_public_key = cursor.fetchone()[0]
+            user_public_key_pem = serialization.load_pem_public_key(user_public_key.encode())
+
+            aes_key = generate_aes_key()
 
             # Find all friends
             cursor.execute(
@@ -341,6 +329,12 @@ def process_request(request):
                 socket = active_clients[username]
                 socket.send(json.dumps(response).encode())
                 return response
+
+                # encrypted_message = encrypt_aes("No friends found.", aes_key)
+                # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+
             # Forward encrypted values to friends
             for friend in friends:
                 if friend in active_clients:
@@ -353,53 +347,22 @@ def process_request(request):
                     socket = active_clients[username]
                     socket.send(json.dumps(response).encode())
                     return response
-                    
+
+                    # encrypted_message = encrypt_aes(f"{friend} is not online", aes_key)
+                    # encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+
+                    # return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                
             return {"status": "success", "message": f"Sent encrypted to {friend}"}
 
         except Exception as error:
             print(error)
     
     elif command == "send_encrypted_distance":
+
         friend_socket = active_clients[request["user1"]]
         friend_socket.send(json.dumps(request).encode())
         return {"status": "success", "message": "Encrypted euclidean sent"}
-    elif command == "send_message":
-        sender_id = get_user_id(request["sender"])
-        recipient_id = get_user_id(request["recipient"])
-        message = request["message"]
-        if not sender_id or not recipient_id:
-            return {"status": "error", "message": "User not found"}
-
-        # Get sender's location grid
-        cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (sender_id,))
-        sender_location = cursor.fetchone()
-        # Get recipient's location grid
-        cursor.execute("SELECT x, y FROM locations WHERE user_id=?", (recipient_id,))
-        recipient_location = cursor.fetchone()
-        if not sender_location or not recipient_location:
-            return {"status": "error", "message": "Location not set"}
-
-        sender_grid = (sender_location[0] // 1000, sender_location[1] // 1000)
-        recipient_grid = (recipient_location[0] // 1000, recipient_location[1] // 1000)
-        # Check if sender and recipient are friends
-        cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
-                       (sender_id, recipient_id, recipient_id, sender_id))
-        are_friends = cursor.fetchone()
-        # Check if sender's grid has been visited by recipient in the past
-        cursor.execute("SELECT 1 FROM messages WHERE sender_id=? AND recipient_id=? AND (sender_grid_x=? AND sender_grid_y=?)",
-                       (sender_id, recipient_id, sender_grid[0], sender_grid[1]))
-        
-        # Condition checks
-        if (sender_grid == recipient_grid) or are_friends:
-            # Store message in the database
-            cursor.execute("INSERT INTO messages (sender_id, recipient_id, message) VALUES (?, ?, ?)", 
-                           (sender_id, recipient_id, message))
-            conn.commit()
-
-            return {"status": "success", "message": "Message sent"}
-
-        else:
-            return {"status": "error", "message": "Cannot message this user as you are not in close proximity"}
     
     elif command == "remove_friend":
         with friendship_lock:
