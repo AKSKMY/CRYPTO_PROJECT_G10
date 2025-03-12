@@ -146,7 +146,7 @@ def process_proximity_request(request, client_socket):
         process_proximity_request(response, client_socket)
 
     elif "command" in response and response["command"] == "send_encrypted_distance":
-        print(f"response of send_encrypted_distance is {response}")
+        #print(f"response of send_encrypted_distance is {response}")
         handle_encrypted_distance(response)
     
 def handle_encrypted_distance(response):
@@ -186,7 +186,7 @@ def handle_encrypted_distance(response):
 
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(0.2)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(1)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
