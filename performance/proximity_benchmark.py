@@ -28,7 +28,7 @@ DB_PATH = "proximity.db"
 # Generate a Paillier key pair
 # ---------------------------------------------------------------
 print("[INFO] Generating Paillier key pair (this may take time)...")
-public_key, private_key = generate_paillier_keypair(n_length=512)
+public_key, private_key = generate_paillier_keypair(n_length=32)
 print("[SUCCESS] Paillier key pair generated!")
 
 
