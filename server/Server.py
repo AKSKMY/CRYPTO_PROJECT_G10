@@ -7,6 +7,8 @@ import sys
 import signal
 import select
 import os
+import hmac
+import hashlib
 from cryptography.hazmat.primitives.asymmetric import rsa, padding
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.exceptions import InvalidSignature
@@ -90,7 +92,7 @@ def handle_client(client_socket):
                 username = request["username"]
                 active_clients[username] = client_socket  # ✅ Store active client
                 print(f"[SERVER] {username} is now online.")
-                
+
             response = process_request(request)
             #print(f"Server sending response: {response}")
             client_socket.send(json.dumps(response).encode())
@@ -112,7 +114,12 @@ def encrypt_aes(data, aes_key):
     padded_data = data + (16 - len(data) % 16) * " "
     ciphertext = encryptor.update(padded_data.encode()) + encryptor.finalize()
 
-    return iv + ciphertext  # Return IV + Encrypted Data
+    # ✅ Generate HMAC using SHA256
+    hmac_key = aes_key  # Using the AES key as HMAC key (or derive separately)
+    hmac_obj = hmac.new(hmac_key, iv + ciphertext, hashlib.sha256)
+    hmac_digest = hmac_obj.digest()
+
+    return iv + ciphertext + hmac_digest  # Return IV + Encrypted Data
 
 def encrypt_aes_key(aes_key, rsa_public_key):
     """Encrypt AES key using recipient's RSA public key."""
@@ -224,7 +231,10 @@ def process_request(request):
                 encrypted_message = encrypt_aes("User not found.", aes_key)
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}") 
+
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
             # ✅ Check if a friendship record already exists
             cursor.execute(
@@ -257,12 +267,18 @@ def process_request(request):
                     encrypted_message = encrypt_aes("Friendship accepted! Public keys exchanged.", aes_key)
                     encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-                    return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                    hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+                    # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
+
+                    return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
             
                 encrypted_message = encrypt_aes("Friend request already sent or already friends.", aes_key)
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
+
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
             # ✅ If no prior friendship exists, insert a new pending request
             cursor.execute(
@@ -274,7 +290,10 @@ def process_request(request):
             encrypted_message = encrypt_aes(f"Friend request sent to {request['friend']}.", aes_key)
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+            hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
+
+            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
         
     elif command == "update_location":
         user_id = get_user_id(request["username"])
@@ -293,7 +312,10 @@ def process_request(request):
             encrypted_message = encrypt_aes("Location updated.", aes_key)
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+            hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
+
+            return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
         
         encrypted_message = encrypt_aes("User not found.", aes_key)
         encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
@@ -379,8 +401,11 @@ def process_request(request):
 
                 encrypted_message = encrypt_aes("User not found.", aes_key)
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+                
+                hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
-                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
             # Check if they are actually friends
             cursor.execute("SELECT 1 FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
@@ -392,7 +417,10 @@ def process_request(request):
                 encrypted_message = encrypt_aes("You are not friends with this user.", aes_key)
                 encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
 
-                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+                hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+                # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
+
+                return {"status": "error", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
             # Remove friendship from database
             cursor.execute("DELETE FROM friendships WHERE (user_id1=? AND user_id2=?) OR (user_id1=? AND user_id2=?)",
@@ -401,8 +429,11 @@ def process_request(request):
 
             encrypted_message = encrypt_aes(f"You are no longer friends with {request['friend']}", aes_key)
             encrypted_aes_key = encrypt_aes_key(aes_key, user_public_key_pem)
+            
+            hmac_digest = hmac.new(aes_key, encrypted_message[:-32], hashlib.sha256).digest().hex()
+            # print(f"[SERVER DEBUG] Sent HMAC (hex): {hmac_digest}")  # Debugging
 
-            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex()}
+            return {"status": "success", "encrypted_aes_key": encrypted_aes_key.hex(), "encrypted_message": encrypted_message.hex(), "hmac": hmac_digest}
 
         # In process_request function on the server
     

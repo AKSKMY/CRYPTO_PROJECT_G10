@@ -9,6 +9,8 @@ import bcrypt
 import threading
 import traceback
 import time
+import hmac
+import hashlib
 from phe import generate_paillier_keypair, paillier
 
 # Ensure the parent directory is in the Python path
@@ -48,11 +50,27 @@ def decrypt_aes_key(encrypted_aes_key, private_key):
         )
     )
 
-def decrypt_aes(encrypted_data, aes_key):
+def decrypt_aes(encrypted_data, aes_key, received_hmac=None):
     """Decrypt AES-encrypted data."""
     encrypted_data = bytes.fromhex(encrypted_data)
+
+    if len(encrypted_data) < 48:  # IV (16 bytes) + Minimum Cipher + HMAC (32 bytes)
+        raise ValueError("[CLIENT ERROR] Encrypted data too short!")
+
     iv = encrypted_data[:16]  # Extract IV
-    ciphertext = encrypted_data[16:]  # Extract ciphertext
+    ciphertext = encrypted_data[16:-32]  # Extract ciphertext
+
+    if received_hmac:
+        # ✅ Compute HMAC on received IV + ciphertext
+        hmac_obj = hmac.new(aes_key, iv + ciphertext, hashlib.sha256)
+        computed_hmac = hmac_obj.digest()
+
+        # print(f"[CLIENT DEBUG] Received HMAC (hex): {received_hmac.hex()}")
+        # print(f"[CLIENT DEBUG] Computed HMAC (hex): {computed_hmac.hex()}")
+
+        if not hmac.compare_digest(received_hmac, computed_hmac):
+            raise ValueError("[CLIENT ERROR] HMAC verification failed! Message integrity compromised.")
+            
 
     cipher = Cipher(algorithms.AES(aes_key), modes.CBC(iv))
     decryptor = cipher.decryptor()
@@ -160,7 +178,7 @@ def handle_encrypted_distance(response):
 
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(0.4)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(2)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
@@ -258,12 +276,6 @@ def send_request(client,request,private_key_pem=None):
         signable_request = {k: v for k, v in request.items() if k not in ["user2", "signature"]}
         request_string = json.dumps(signable_request, separators=(',', ':'))
         if private_key_pem:
-        #     #request["signature"] = serialization.load_pem_private_key(private_key_pem.encode(), password=None).sign(request_string, padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256()).hex()
-        #     private_key = serialization.load_pem_private_key(
-        #     private_key_pem.encode(),  # Convert string PEM to key object
-        #     password=None
-        # )
-
             # ✅ Ensure the private key is an RSA object, not a string
             if isinstance(private_key_pem, str):
                 private_key = serialization.load_pem_private_key(
@@ -615,9 +627,9 @@ def main():
                         print("[CLIENT ERROR] Invalid private key format")
 
                     aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
+                    received_hmac = bytes.fromhex(response["hmac"])
+                    decrypted_message = decrypt_aes(encrypted_message, aes_key, received_hmac)
 
-                    # ✅ Decrypt recipient's public key using AES
-                    decrypted_message = decrypt_aes(encrypted_message, aes_key)
                     print(decrypted_message)
                 else:
                     print(response["message"])
@@ -647,7 +659,8 @@ def main():
                         aes_key = decrypt_aes_key(encrypted_aes_key, private_key_pem)
 
                         # ✅ Decrypt recipient's public key using AES
-                        decrypted_message = decrypt_aes(encrypted_message, aes_key)
+                        received_hmac = bytes.fromhex(response["hmac"])
+                        decrypted_message = decrypt_aes(encrypted_message, aes_key, received_hmac)
                         print(decrypted_message)
                     else:
                         print(response["message"])
