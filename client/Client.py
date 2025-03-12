@@ -218,14 +218,6 @@ def receive_messages(client_socket, username, private_key_pem):
                         print("Signature verification failed, message ignored. Press enter to continue.")
                         continue
 
-                print("Signature verification success.")
-
-                # status = response.get("status")
-                # if status == "error":
-                #     print(response["message"])
-                # elif status == "success":
-                #     print(response["message"])
-
                 if "message" in response:
                     print(response["message"])
                 elif "encrypted_message" in response and "encrypted_aes_key" in response:
@@ -235,9 +227,7 @@ def receive_messages(client_socket, username, private_key_pem):
                         print(f"[CLIENT ERROR] Decryption failed: {e}")
                 elif "status" in response and response["status"] == "error":
                     print(f"[SERVER ERROR] {response.get('error', 'Unknown error')}")
-                else:
-                    print("[CLIENT ERROR] Unexpected response format:", response)
-
+                
                 command = response.get("command")
 
                 # ✅ Handle different command types
@@ -267,11 +257,6 @@ def send_request(client,request,private_key_pem=None):
         signable_request = {k: v for k, v in request.items() if k not in ["user2", "signature"]}
         request_string = json.dumps(signable_request, separators=(',', ':'))
         if private_key_pem:
-        #     #request["signature"] = serialization.load_pem_private_key(private_key_pem.encode(), password=None).sign(request_string, padding.PSS(mgf = padding.MGF1(hashes.SHA256()), salt_length = padding.PSS.MAX_LENGTH), hashes.SHA256()).hex()
-        #     private_key = serialization.load_pem_private_key(
-        #     private_key_pem.encode(),  # Convert string PEM to key object
-        #     password=None
-        # )
 
             # ✅ Ensure the private key is an RSA object, not a string
             if isinstance(private_key_pem, str):
@@ -599,10 +584,6 @@ def main():
 
                 start_time = time.time()
                 check_proximity(username, client, private_key_pem, method)
-                # ✅ Get CPU usage after execution
-                #cpu_after = process.cpu_percent(interval=None)
-                #end_time = time.time()  # End timer
-
                 
                 time.sleep(0.1)
                 input("Press enter to continue...\n")
