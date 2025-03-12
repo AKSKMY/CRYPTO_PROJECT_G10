@@ -81,10 +81,10 @@ def handle_client(client_socket):
                 #print("Ignoring empty request.")  # ✅ Instead of breaking, just log and continue
                 break
             request = json.loads(data)
-            if(request["username"]):
+            try:
                 print(f"Server received command: '{request['command']}' from user '{request['username']}'")
-            else:
-                print(f"Server received command: '{request['command']}")
+            except:
+                print(f"Server received command request: {request['command']}")
             if request["command"] == "login":
                 username = request["username"]
                 active_clients[username] = client_socket  # ✅ Store active client
@@ -313,7 +313,6 @@ def process_request(request):
                 if friend in active_clients:
                     friend_socket = active_clients[friend]
                     request["user2"] = friend
-                    print(f"request is {request}")
                     friend_socket.send(json.dumps(request).encode())
                     
                 else:
@@ -395,7 +394,6 @@ def process_request(request):
     elif command == "logout":
         username = request["username"]
         del active_clients[username]
-        print(f"{username} has logged out.")
         return {"status": "success", "message": f"{username} has logged out."}
     return {"status": "error", "message": f"Unknown command {command}"}
     
