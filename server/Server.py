@@ -328,7 +328,7 @@ def process_request(request):
     elif command == "send_encrypted_distance":
         friend_socket = active_clients[request["user1"]]
         friend_socket.send(json.dumps(request).encode())
-        return {"status": "success", "message": "Encrypted euclidean sent"}
+        return {"status": "success", "message": "Encrypted euclidean sent."}
     elif command == "send_message":
         sender_id = get_user_id(request["sender"])
         recipient_id = get_user_id(request["recipient"])
