@@ -2,7 +2,7 @@ import random
 import sympy
 import numpy as np
 
-def elgamal_generate_keys(key_size=32):
+def elgamal_generate_keys(key_size=16):
     print('Elgamal Ops : Generating Elgamal keys...')
     """Generate ElGamal key pair."""
     # Generate a large prime number p

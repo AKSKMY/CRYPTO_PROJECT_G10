@@ -186,7 +186,7 @@ def handle_encrypted_distance(response):
 
 def receive_messages(client_socket, username, private_key_pem):
     """Continuously listen for incoming messages from the server without blocking."""
-    client_socket.settimeout(2)  # ✅ Prevents indefinite blocking
+    client_socket.settimeout(0.2)  # ✅ Prevents indefinite blocking
     try:
         while True:
             try:
@@ -614,7 +614,6 @@ def main():
 
                 # Check if a message history exists before adding the friend
                 response = send_request(client,{"command": "add_friend", "username": username, "friend": friend_name}, private_key_pem)
-
                 # if response["status"] == "success":
                 if "encrypted_message" in response:
                     encrypted_message = response["encrypted_message"]
